@@ -19,7 +19,7 @@ public:
     ustr name() const override { return "Game"; }
 
 private:
-    async::future<> run() override;
+    async::future<> run(service::ServiceController &service_ctrl) override;
 };
 
 jungle_core_service_register(Game);

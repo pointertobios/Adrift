@@ -8,8 +8,9 @@ namespace jungle::core::log {
 Logging::Logging()
         : service::Service{type_id::of<Logging>()} {}
 
-async::future<> Logging::run() {
+async::future<> Logging::run(service::ServiceController &service_ctrl) {
     std::println("Logging Service");
+    co_await service_ctrl.wait_for_stop();
     co_return;
 }
 

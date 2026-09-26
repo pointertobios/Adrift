@@ -8,8 +8,9 @@ namespace jungle::core::asset {
 Asset::Asset()
         : service::Service{type_id::of<Asset>()} {}
 
-async::future<> Asset::run() {
+async::future<> Asset::run(service::ServiceController &service_ctrl) {
     std::println("Asset Service");
+    co_await service_ctrl.wait_for_stop();
     co_return;
 }
 

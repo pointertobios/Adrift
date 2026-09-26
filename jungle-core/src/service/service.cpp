@@ -14,13 +14,11 @@ ServiceCreator Service::get_service_creator(string_id name) {
     return *res;
 }
 
-async::future<> Service::join() {
-    co_await m_run_task;
-}
+async::future<> Service::join() { co_await m_run_task; }
 
-void Service::start() {
+void Service::start(ServiceController &service_ctrl) {
     JUNGLE_ASSERT(m_run_task.is_empty());
-    m_run_task = this_task::spawn([&] -> async::future<> { co_await run(); });
+    m_run_task = this_task::spawn([&] -> async::future<> { co_await run(service_ctrl); });
 }
 
 };  // namespace jungle::core::service

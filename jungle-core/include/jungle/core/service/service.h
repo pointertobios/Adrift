@@ -11,6 +11,7 @@
 #include "jungle/async/future.h"
 #include "jungle/async/join_handle.h"
 #include "jungle/container/hash_map.h"
+#include "jungle/core/service/service_controller.h"
 #include "jungle/types/string_id.h"
 #include "jungle/util/type_mutate.h"
 
@@ -51,7 +52,7 @@ public:
 
     virtual ustr name() const = 0;
 
-    void start();
+    void start(ServiceController &service_ctrl);
 
     async::future<> join();
 
@@ -59,7 +60,7 @@ protected:
     constexpr Service(type_id type)
             : type_mutate<Service>{type} {}
 
-    virtual async::future<> run() = 0;
+    virtual async::future<> run(ServiceController &service_ctrl) = 0;
 
 private:
     async::join_handle<> m_run_task{};

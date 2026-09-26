@@ -26,8 +26,9 @@ Application::Application(std::span<string_id> using_services) {
 }
 
 async::future<> Application::run() {
+    service::ServiceController ctrl;
     for (auto &service : m_service_table) {
-        service.value()->start();
+        service.value()->start(ctrl);
     }
     for (auto &service : m_service_table) {
         co_await service.value()->join();
