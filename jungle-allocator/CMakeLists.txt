@@ -25,7 +25,7 @@ jungle_collect_files(JUNGLE_SOURCES
 
 add_library(jungle-allocator SHARED ${JUNGLE_SOURCES})
 target_include_directories(jungle-allocator PUBLIC include)
-target_link_libraries(jungle-allocator PUBLIC jungle::config)
+target_link_libraries(jungle-allocator PUBLIC jungle::config jungle::infrastructure)
 target_precompile_headers(jungle-allocator PUBLIC ${PRECOMPILE_HEADERS})
 add_library(jungle::allocator ALIAS jungle-allocator)
 
