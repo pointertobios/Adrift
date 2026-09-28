@@ -62,23 +62,15 @@ private:
     ~arena();
 
     const u8 *m_start;
-    const usize m_numa_node;
+    const u8 m_numa_node;
 
-    alignas(16) std::array<u16, 1024> m_slice_radix_map{0};
-
+    u16 m_load{0};
+    
     std::atomic<arena *> m_next{nullptr};
 
-    std::atomic<u8> m_bitmap_1024sl{0};
-    std::atomic<u8> m_bitmap_512sl{0};
-    std::atomic<u8> m_bitmap_256sl{0};
-    std::atomic<u8> m_bitmap_128sl{0};
-    std::atomic<u16> m_bitmap_64sl{0};
-    std::atomic<u32> m_bitmap_32sl{0};
-    std::atomic<u64> m_bitmap_16sl{0};
-    std::array<std::atomic<u64>, 2> m_bitmap_8sl{0};
-    std::array<std::atomic<u64>, 4> m_bitmap_4sl{0};
-    std::array<std::atomic<u64>, 8> m_bitmap_2sl{0};
-    std::array<std::atomic<u64>, 16> m_bitmap_1sl{0};
+    std::array<u16, 1024> m_slice_radix_map{0};
+
+    block_list *m_slice_descriptor_free_list{nullptr};
 };
 
 };  // namespace jungle::allocator
