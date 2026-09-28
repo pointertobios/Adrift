@@ -7,12 +7,12 @@
 
 namespace jungle::os::memory {
 
-void *reserve_space(usize size);
+void *reserve_space(usize size, usize alignment);
 
-// 需要页对齐的地址和大小
 void commit_space(void *address, usize size);
 
-// 需要页对齐的地址和大小
 void uncommit_space(void *address, usize size);
+
+void deprecate_space(void *address, usize size);
 
 };  // namespace jungle::os::memory

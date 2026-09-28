@@ -20,10 +20,35 @@ slice_descriptor_slice::slice_descriptor_slice()
         : m_storage{}
         , m_descriptor{reinterpret_cast<u8 *>(&m_storage), sizeof(m_storage), sizeof(slice_descriptor)} {}
 
-arena::arena(u8 *start, usize size, usize numa)
-        : m_start{start}
-        , m_size{size}
-        , m_numa_node{numa}
-        , m_slice_count{size / slice_size} {}
+constexpr usize arena_alloc_section_size = 16 * 1024;
+
+arena *arena::create() {
+    thread_local u8 *tls_arena_current_alloc_section{nullptr};
+    thread_local usize tls_arena_current_begin{arena_alloc_section_size};
+
+    if (arena_alloc_section_size - tls_arena_current_begin < sizeof(arena)) {
+        tls_arena_current_alloc_section =
+            static_cast<u8 *>(os::memory::reserve_space(arena_alloc_section_size, arena_alloc_section_size));
+        tls_arena_current_begin = 0;
+    }
+
+    auto res = reinterpret_cast<arena *>(tls_arena_current_alloc_section + tls_arena_current_begin);
+    os::memory::commit_space(res, sizeof(arena));
+    new (res) arena{};
+    return res;
+}
+
+void arena::destroy() {
+    this->~arena();
+    if ((reinterpret_cast<usize>(this) & (arena_alloc_section_size - 1)) == 0) {
+        os::memory::deprecate_space(this, arena_alloc_section_size);
+    }
+}
+
+arena::arena()
+        : m_start{static_cast<u8 *>(os::memory::reserve_space(size, size))}
+        , m_numa_node{0} {}
+
+arena::~arena() { os::memory::deprecate_space(const_cast<u8 *>(m_start), size); }
 
 };  // namespace jungle::allocator

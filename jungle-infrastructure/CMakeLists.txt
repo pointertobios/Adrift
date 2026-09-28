@@ -35,6 +35,10 @@ set(JUNGLE_DEPLIBS
     stdc++exp
 )
 
+if (WIN32)
+    list(APPEND JUNGLE_DEPLIBS onecore)
+endif()
+
 set(JUNGLE_OPTIONS
     -Wall
     -Wextra

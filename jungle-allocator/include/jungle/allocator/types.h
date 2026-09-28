@@ -21,6 +21,8 @@ struct block_list {
     }
 };
 
+class arena;
+
 class alignas(64) slice_descriptor {
 public:
     slice_descriptor(u8 *start, usize size, usize unit_size);
@@ -46,17 +48,25 @@ struct slice_descriptor_slice {
 class arena {
     static constexpr usize slice_size = 0x1'000;
 
+    static constexpr usize size = 0x400'000;
+
+    static constexpr usize slice_count = size / slice_size;
+
 public:
-    arena(u8 *start, usize size, usize numa);
+    static arena *create();
+
+    void destroy();
 
 private:
-    const u8 *m_start;   // `slice_size` 对齐
-    const usize m_size;  // `slice_size` 对齐
+    arena();
+    ~arena();
+
+    const u8 *m_start;
     const usize m_numa_node;
 
-    std::atomic<arena *> m_next{nullptr};
+    alignas(16) std::array<u16, 1024> m_slice_radix_map{0};
 
-    usize m_slice_count;
+    std::atomic<arena *> m_next{nullptr};
 
     std::atomic<u8> m_bitmap_1024sl{0};
     std::atomic<u8> m_bitmap_512sl{0};
