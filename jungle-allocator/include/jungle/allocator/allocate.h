@@ -3,11 +3,10 @@
 
 #pragma once
 
-#include <cstddef>
-#include <new>
+#include "jungle/types/int.h"
 
 namespace jungle::allocator {
 
-void *allocate(std::size_t n, std::align_val_t align);
+void *allocate(usize n, usize align);
 
 };  // namespace jungle::allocator

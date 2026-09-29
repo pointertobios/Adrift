@@ -11,6 +11,18 @@
 
 namespace jungle::allocator {
 
+constexpr usize lowest_unit = 16;
+
+constexpr usize size_class_by(usize size) { return (size - 1) / 16; }
+
+constexpr usize units_by(usize size) { return size_class_by(size) + 1; }
+
+template<typename T>
+constexpr usize size_class_of = (sizeof(T) - 1) / 16;
+
+template<typename T>
+constexpr usize units_of = size_class_of<T> + 1;
+
 struct block_list {
     block_list *next;
     usize unit_count;
@@ -24,8 +36,16 @@ struct block_list {
 class arena;
 
 class alignas(64) slice_descriptor {
+    friend class arena;
+
 public:
+    static slice_descriptor *&local_slice_descriptor_slice_descriptor_list();
+    static slice_descriptor *&local_list(usize size_class);
+
     slice_descriptor(u8 *start, usize size, usize unit_size);
+
+    void *allocate();
+    void deallocate(void *ptr);
 
 private:
     const u8 *m_start;
@@ -34,8 +54,11 @@ private:
     const usize m_unit_count;
 
     block_list *m_free_list{nullptr};
+    usize m_free_units{m_unit_count};
 
     std::atomic<block_list *> m_external_giveback_list{nullptr};
+
+    slice_descriptor *m_next{nullptr};
 };
 
 struct slice_descriptor_slice {
@@ -53,24 +76,41 @@ class arena {
     static constexpr usize slice_count = size / slice_size;
 
 public:
+    static constexpr usize size_classes = size / slice_size;
+
+    static arena *of_address(void *address);
     static arena *create();
+    static arena *bootstrap();
 
     void destroy();
 
+    slice_descriptor *slice_descriptor_of_address(u8 *address) const;
+
+    u8 *allocate_slice(usize size_class);
+    void deallocate_slice(slice_descriptor *sd);
+
 private:
     arena();
+    arena(u8 *start);
+
+    arena(arena &&rhs);
+
     ~arena();
 
-    const u8 *m_start;
+    slice_descriptor *allocate_descriptor_slice();
+
+    void set_slice_descriptor_of_address(u8 *address, usize count, slice_descriptor *sd);
+
+    static void map_arena(void *start, arena *target);
+
+    u8 *m_start;
     const u8 m_numa_node;
 
     u16 m_load{0};
-    
+
     std::atomic<arena *> m_next{nullptr};
 
-    std::array<u16, 1024> m_slice_radix_map{0};
-
-    block_list *m_slice_descriptor_free_list{nullptr};
+    std::array<slice_descriptor *, slice_count> m_slice_radix_map{0};
 };
 
 };  // namespace jungle::allocator
