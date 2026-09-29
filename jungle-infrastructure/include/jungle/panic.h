@@ -3,8 +3,14 @@
 
 #pragma once
 
+#include <concepts>
+#include <cstdlib>
+#include <format>
 #include <print>
 #include <source_location>
+#include <string>
+#include <string_view>
+#include <type_traits>
 
 namespace jungle {
 

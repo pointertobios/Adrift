@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include <format>
+#include <string>
+
 #include "jungle/panic.h"
 
 namespace jungle {
