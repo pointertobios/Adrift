@@ -33,13 +33,49 @@ slice_descriptor::slice_descriptor(u8 *start, usize size, usize unit_size)
         , m_size{size}
         , m_unit_size{unit_size}
         , m_unit_count{size / unit_size} {
+    JUNGLE_ASSERT(!(reinterpret_cast<usize>(start) & (arena::slice_size - 1)));
+    JUNGLE_ASSERT(size / arena::slice_size <= arena::size_classes);
+    JUNGLE_ASSERT(!(unit_size & (lowest_unit - 1)));
+
     m_free_list = reinterpret_cast<block_list *>(const_cast<u8 *>(m_start));
     new (m_free_list) block_list{nullptr, m_unit_count};
+}
+
+u8 *slice_descriptor::allocate() {
+    auto res = m_free_list;
+    if (res->unit_count == 1) [[likely]] {
+        m_free_list = res->next;
+    } else {
+        new (res + 1) block_list{res->next, res->unit_count - 1};
+        m_free_list = res + 1;
+    }
+    res->~block_list();
+    m_free_units--;
+    return reinterpret_cast<u8 *>(res);
+}
+
+void slice_descriptor::deallocate(void *ptr) {
+    const auto block = new (ptr) block_list{m_free_list, 1};
+    m_free_list = block;
+    m_free_units++;
+}
+
+void slice_descriptor::remote_deallocate(void *ptr) {
+    const auto block = new (ptr) block_list{m_free_list, 1};
+    while (true) {
+        auto first = m_remote_giveback_list.load(morder::acquire);
+        block->next = first;
+        if (m_remote_giveback_list.compare_exchange_strong(first, block, morder::acq_rel, morder::relaxed)) {
+            break;
+        }
+    }
 }
 
 slice_descriptor_slice::slice_descriptor_slice()
         : m_storage{}
         , m_descriptor{reinterpret_cast<u8 *>(&m_storage), sizeof(m_storage), sizeof(slice_descriptor)} {}
+
+namespace {
 
 std::atomic<arena *> g_arena_list{nullptr};
 
@@ -54,10 +90,8 @@ struct alignas(4096) arena_map {
 
 std::array<std::atomic<arena_map *>, 32> g_arena_map{nullptr};
 
-namespace helper {
-
-std::array<u16, 5> into_map_indeces(void *ptr) {
-    auto addr = reinterpret_cast<usize>(ptr);
+std::array<u16, 5> into_map_indices(void *ptr) {
+    const auto addr = reinterpret_cast<usize>(ptr);
     std::array<u16, 5> arr{};
     arr[0] = (addr >> 22) & 0x1ff;
     arr[1] = (addr >> (22 + 9)) & 0x1ff;
@@ -67,10 +101,10 @@ std::array<u16, 5> into_map_indeces(void *ptr) {
     return arr;
 }
 
-};  // namespace helper
+};  // namespace
 
 void arena::map_arena(void *start, arena *target) {
-    auto arr = helper::into_map_indeces(start);
+    const auto arr = into_map_indices(start);
     auto map0 = g_arena_map[arr[0]].load(morder::acquire);
     if (!map0) {
         map0 = new (target->allocate_slice(0)) arena_map{};
@@ -95,16 +129,16 @@ void arena::map_arena(void *start, arena *target) {
 }
 
 arena *arena::of_address(void *address) {
-    auto arr = helper::into_map_indeces(address);
-    auto map0 = g_arena_map[arr[0]].load(morder::acquire);
+    const auto arr = into_map_indices(address);
+    const auto map0 = g_arena_map[arr[0]].load(morder::acquire);
     JUNGLE_ASSERT(map0);
-    auto map1 = map0->entries[arr[1]].sub_map.load(morder::acquire);
+    const auto map1 = map0->entries[arr[1]].sub_map.load(morder::acquire);
     JUNGLE_ASSERT(map1);
-    auto map2 = map1->entries[arr[2]].sub_map.load(morder::acquire);
+    const auto map2 = map1->entries[arr[2]].sub_map.load(morder::acquire);
     JUNGLE_ASSERT(map2);
-    auto map3 = map2->entries[arr[3]].sub_map.load(morder::acquire);
+    const auto map3 = map2->entries[arr[3]].sub_map.load(morder::acquire);
     JUNGLE_ASSERT(map3);
-    auto res = map3->entries[arr[4]].target.load(morder::acquire);
+    const auto res = map3->entries[arr[4]].target.load(morder::acquire);
     JUNGLE_ASSERT(res);
     return res;
 }
@@ -116,7 +150,7 @@ arena *arena::create() {
 
     auto addr = allocate(sizeof(arena), alignof(arena));
     JUNGLE_ASSERT(addr);
-    auto res = new (addr) arena{};
+    const auto res = new (addr) arena{};
     map_arena(res->m_start, res);
     return res;
 }
@@ -124,15 +158,14 @@ arena *arena::create() {
 arena *arena::bootstrap() {
     arena tmp_arena{static_cast<u8 *>(os::memory::reserve_space(size, size))};
 
-    auto sd_slice_descriptor = tmp_arena.allocate_descriptor_slice();
+    const auto sd_slice_descriptor = tmp_arena.allocate_descriptor_slice();
 
-    auto arena_slice_addr = tmp_arena.allocate_slice(size_class_of<arena>);
+    const auto arena_slice_addr = tmp_arena.allocate_slice(size_class_of<arena>);
     constexpr auto slice_total_size = units_of<arena> * slice_size;
 
     auto arena_sd_addr = sd_slice_descriptor->allocate();
-    tmp_arena.set_slice_descriptor_of_address(
-        reinterpret_cast<u8 *>(arena_sd_addr), units_of<arena>, sd_slice_descriptor);
-    auto arena_sd = new (arena_sd_addr)
+    tmp_arena.set_slice_descriptor_of_address(arena_sd_addr, units_of<arena>, sd_slice_descriptor);
+    const auto arena_sd = new (arena_sd_addr)
         slice_descriptor{arena_slice_addr, slice_total_size, units_of<arena> * lowest_unit};
     auto &local_list = slice_descriptor::local_list(size_class_of<arena>);
     JUNGLE_ASSERT(!local_list);
@@ -155,7 +188,7 @@ arena *arena::bootstrap() {
 }
 
 void arena::destroy() {
-    auto host_arena = arena::of_address(this);
+    const auto host_arena = arena::of_address(this);
     auto sd = host_arena->slice_descriptor_of_address(reinterpret_cast<u8 *>(this));
     sd->deallocate(this);
     if (host_arena == this) {
@@ -168,9 +201,9 @@ void arena::destroy() {
 }
 
 slice_descriptor *arena::slice_descriptor_of_address(u8 *address) const {
-    auto offset = address - m_start;
+    const auto offset = address - m_start;
     JUNGLE_ASSERT(offset >= 0 && offset < static_cast<isize>(slice_count * slice_size));
-    auto slice_index = offset / slice_size;
+    const auto slice_index = offset / slice_size;
     return m_slice_radix_map[slice_index];
 }
 
@@ -193,7 +226,7 @@ arena::arena(arena &&rhs)
 
 arena::~arena() {
     if (m_start) {
-        os::memory::deprecate_space(const_cast<u8 *>(m_start), size);
+        os::memory::deprecate_space(m_start, size);
     }
 }
 

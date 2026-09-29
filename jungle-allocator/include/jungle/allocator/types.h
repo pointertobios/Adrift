@@ -44,8 +44,9 @@ public:
 
     slice_descriptor(u8 *start, usize size, usize unit_size);
 
-    void *allocate();
+    u8 *allocate();
     void deallocate(void *ptr);
+    void remote_deallocate(void *ptr);
 
 private:
     const u8 *m_start;
@@ -56,7 +57,7 @@ private:
     block_list *m_free_list{nullptr};
     usize m_free_units{m_unit_count};
 
-    std::atomic<block_list *> m_external_giveback_list{nullptr};
+    std::atomic<block_list *> m_remote_giveback_list{nullptr};
 
     slice_descriptor *m_next{nullptr};
 };
@@ -69,8 +70,10 @@ struct slice_descriptor_slice {
 };
 
 class arena {
+public:
     static constexpr usize slice_size = 0x1'000;
 
+private:
     static constexpr usize size = 0x400'000;
 
     static constexpr usize slice_count = size / slice_size;
@@ -91,7 +94,7 @@ public:
 
 private:
     arena();
-    arena(u8 *start);
+    explicit arena(u8 *start);
 
     arena(arena &&rhs);
 
