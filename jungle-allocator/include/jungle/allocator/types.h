@@ -113,7 +113,7 @@ private:
 
     std::atomic<arena *> m_next{nullptr};
 
-    std::array<slice_descriptor *, slice_count> m_slice_radix_map{0};
+    std::array<slice_descriptor *, slice_count> m_slice_radix_map{nullptr};
 };
 
 };  // namespace jungle::allocator

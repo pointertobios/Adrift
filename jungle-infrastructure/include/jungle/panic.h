@@ -45,4 +45,6 @@ template<typename... Args>
     panic(std::vformat(fmt.get(), std::make_format_args(args...)), fmt.source_location());
 }
 
+[[noreturn]] void panic_oom();
+
 };  // namespace jungle

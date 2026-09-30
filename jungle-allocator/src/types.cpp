@@ -113,17 +113,17 @@ void arena::map_arena(void *start, arena *target) {
     auto map1 = map0->entries[arr[1]].sub_map.load(morder::acquire);
     if (!map1) {
         map1 = new (target->allocate_slice(0)) arena_map{};
-        g_arena_map[arr[1]].store(map1, morder::release);
+        map0->entries[arr[1]].sub_map.store(map1, morder::release);
     }
     auto map2 = map1->entries[arr[2]].sub_map.load(morder::acquire);
     if (!map2) {
         map2 = new (target->allocate_slice(0)) arena_map{};
-        g_arena_map[arr[2]].store(map2, morder::release);
+        map1->entries[arr[2]].sub_map.store(map2, morder::release);
     }
     auto map3 = map2->entries[arr[3]].sub_map.load(morder::acquire);
     if (!map3) {
         map3 = new (target->allocate_slice(0)) arena_map{};
-        g_arena_map[arr[3]].store(map3, morder::release);
+        map2->entries[arr[3]].sub_map.store(map3, morder::release);
     }
     map3->entries[arr[4]].target.store(target, morder::release);
 }
@@ -149,7 +149,9 @@ arena *arena::create() {
     }
 
     auto addr = allocate(sizeof(arena), alignof(arena));
-    JUNGLE_ASSERT(addr);
+    if (!addr) {
+        panic_oom();
+    }
     const auto res = new (addr) arena{};
     map_arena(res->m_start, res);
     return res;
