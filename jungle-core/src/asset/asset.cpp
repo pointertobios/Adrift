@@ -3,6 +3,8 @@
 
 #include "jungle/core/asset/asset.h"
 
+#include <print>
+
 namespace jungle::core::asset {
 
 Asset::Asset()

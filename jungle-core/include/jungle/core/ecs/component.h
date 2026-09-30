@@ -8,7 +8,6 @@
 
 #include "jungle/assert.h"
 #include "jungle/core/ecs/entity.h"
-#include "jungle/panic.h"
 #include "jungle/preusing.h"
 #include "jungle/util/type_mutate.h"
 

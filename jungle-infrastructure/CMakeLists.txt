@@ -70,6 +70,7 @@ target_compile_definitions(jungle-config PUBLIC ${JUNGLE_DEFINES})
 add_library(jungle::config ALIAS jungle-config)
 
 add_library(jungle-infrastructure ${JUNGLE_SOURCES})
+target_link_libraries(jungle-infrastructure PRIVATE cpptrace::cpptrace)
 target_precompile_headers(jungle-infrastructure PUBLIC ${PRECOMPILE_HEADERS})
 target_link_libraries(jungle-infrastructure PUBLIC ${JUNGLE_DEPLIBS} jungle::config)
 target_include_directories(jungle-infrastructure PUBLIC include)

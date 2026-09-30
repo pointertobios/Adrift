@@ -7,7 +7,6 @@
 
 #include "jungle/assert.h"
 #include "jungle/debug.h"
-#include "jungle/panic.h"
 #include "jungle/preusing.h"
 
 namespace jungle::core::ecs {

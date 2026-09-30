@@ -3,6 +3,8 @@
 
 #include "jungle/core/log/logging.h"
 
+#include <print>
+
 namespace jungle::core::log {
 
 Logging::Logging()

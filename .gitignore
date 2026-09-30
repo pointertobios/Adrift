@@ -1,6 +1,8 @@
 /.vscode
 /.idea
 /.cache
+/.jgproj/3rd
 /build*
 /cmake-build*
 book
+__pycache__

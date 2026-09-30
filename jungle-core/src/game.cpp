@@ -3,6 +3,8 @@
 
 #include "jungle/core/game.h"
 
+#include <print>
+
 namespace jungle::core {
 
 Game::Game()

@@ -1,7 +1,7 @@
 # Copyright (C) 2026 pointer-to-bios <pointer-to-bios@outlook.com>
 # SPDX-License-Identifier: MIT
 
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 4.0)
 project(Jungle VERSION 0.1.0 LANGUAGES CXX)
 
 # Compiler and linker config
@@ -21,15 +21,14 @@ enable_testing()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
-# Dependencies
-
-# Jungle config
-
 add_subdirectory(jungle-infrastructure)
-add_subdirectory(jungle-base)
-add_subdirectory(jungle-tasks)
-add_subdirectory(jungle-allocator)
-add_subdirectory(jungle-core)
 add_subdirectory(jungle-ui)
-
+add_subdirectory(jungle-base)
+add_subdirectory(jungle-allocator)
+add_subdirectory(jungle-tasks)
+add_subdirectory(jungle-core)
+add_subdirectory(jungle-reflection)
 add_subdirectory(tests)
+
+# jgproj 3rd: cpptrace
+add_subdirectory(${CMAKE_SOURCE_DIR}/.jgproj/3rd/cpptrace)

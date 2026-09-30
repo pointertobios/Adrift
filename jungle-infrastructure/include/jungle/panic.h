@@ -4,11 +4,8 @@
 #pragma once
 
 #include <concepts>
-#include <cstdlib>
 #include <format>
-#include <print>
 #include <source_location>
-#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -37,28 +34,14 @@ using format_string = format_string_type<std::type_identity_t<Args>...>;
 
 };  // namespace fmt
 
-[[noreturn]] consteval void consteval_panic();
+[[noreturn]] void panic(std::string_view msg, std::source_location sl = std::source_location::current());
 
-[[noreturn]] inline constexpr void
-panic(std::string_view msg, std::source_location sl = std::source_location::current()) {
-    std::string msg_final;
-    if (msg.size()) {
-        msg_final = std::format(": {}", msg);
-    }
-    if consteval {
-        consteval_panic();
-    } else {
-        std::println(stderr, "Panicked at {}:{}:{}{}", sl.file_name(), sl.line(), sl.column(), msg_final);
-        std::abort();
-    }
-}
-
-[[noreturn]] inline constexpr void panic(std::source_location sl = std::source_location::current()) {
+[[noreturn]] inline void panic(std::source_location sl = std::source_location::current()) {
     panic("", sl);
 }
 
 template<typename... Args>
-[[noreturn]] inline constexpr void panic(fmt::format_string<Args...> fmt, Args &&...args) {
+[[noreturn]] void panic(fmt::format_string<Args...> fmt, Args &&...args) {
     panic(std::vformat(fmt.get(), std::make_format_args(args...)), fmt.source_location());
 }
 
