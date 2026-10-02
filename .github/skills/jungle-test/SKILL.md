@@ -45,11 +45,12 @@ JUNGLE_SYNC_TEST(describe_what_is_tested) {
 
 在代码库中搜索该名称，确定它属于哪个模块：
 
-| 模块           | 命名空间                             | 测试目录                   |
-| -------------- | ------------------------------------ | -------------------------- |
-| `jungle-base`  | `jungle::`                           | `jungle-base/unit_tests/`  |
-| `jungle-core`  | `jungle::core::`                     | `jungle-core/unit_tests/`  |
-| `jungle-tasks` | `jungle::tasks::` / `jungle::sync::` | `jungle-tasks/unit_tests/` |
+| 模块                    | 命名空间             | 测试目录                   |
+| ----------------------- | -------------------- | -------------------------- |
+| `jungle-infrastructure` | `jungle::` / `jungle::sync::` | `jungle-tasks/unit_tests/`（测试框架位于 tasks） |
+| `jungle-base`           | `jungle::`           | `jungle-base/unit_tests/`  |
+| `jungle-core`           | `jungle::core::`     | `jungle-core/unit_tests/`  |
+| `jungle-tasks`          | `jungle::tasks::`    | `jungle-tasks/unit_tests/` |
 
 搜索策略：
 

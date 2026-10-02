@@ -38,3 +38,17 @@ add_library(jungle-allocator-ext STATIC ${JUNGLE_EXT_SOURCES})
 target_link_libraries(jungle-allocator-ext PRIVATE jungle::allocator)
 target_precompile_headers(jungle-allocator-ext PUBLIC ${PRECOMPILE_HEADERS_EXT})
 add_library(jungle::allocator-ext ALIAS jungle-allocator-ext)
+
+# Unit Tests
+
+add_executable(jungle-allocator-size-class-test unit_tests/size_class.cpp)
+target_link_libraries(jungle-allocator-size-class-test PRIVATE jungle::allocator)
+add_test(NAME jungle-allocator-size-class-test COMMAND jungle-allocator-size-class-test)
+
+add_executable(jungle-allocator-arena-test unit_tests/arena.cpp)
+target_link_libraries(jungle-allocator-arena-test PRIVATE jungle::allocator)
+add_test(NAME jungle-allocator-arena-test COMMAND jungle-allocator-arena-test)
+
+add_executable(jungle-allocator-allocate-test unit_tests/allocate.cpp)
+target_link_libraries(jungle-allocator-allocate-test PRIVATE jungle::allocator)
+add_test(NAME jungle-allocator-allocate-test COMMAND jungle-allocator-allocate-test)

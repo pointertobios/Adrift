@@ -8,9 +8,10 @@
 #include "jungle/types/concepts.h"  // IWYU pragma: keep
 #include "jungle/types/int.h"       // IWYU pragma: keep
 #include "jungle/types/types.h"     // IWYU pragma: keep
-#include "jungle/types/ustr.h"      // IWYU pragma: keep
 #include "jungle/types/uchar.h"     // IWYU pragma: keep
+#include "jungle/types/ustr.h"      // IWYU pragma: keep
 #include "jungle/util/type_id.h"    // IWYU pragma: keep
+#include "jungle/util/unwrap.h"     // IWYU pragma: keep
 
 namespace jungle {
 

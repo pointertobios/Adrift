@@ -15,7 +15,7 @@ namespace jungle::os::memory {
 const auto page_size = static_cast<usize>(::sysconf(_SC_PAGESIZE));
 
 void *reserve_space(usize size, usize alignment) {
-    JUNGLE_ASSERT(alignment >= page_size && std::popcount(alignment) == 1);
+    JUNGLE_ASSERT(std::popcount(alignment) == 1);
 
     const auto reservation_size = size + alignment;
     auto *const reservation =

@@ -8,7 +8,8 @@
 
 #include "jungle/assert.h"
 #include "jungle/constants.h"
-#include "jungle/preusing.h"
+#include "jungle/types/concepts.h"
+#include "jungle/types/int.h"
 
 namespace jungle::sync {
 
