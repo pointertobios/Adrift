@@ -1,0 +1,690 @@
+// Copyright (C) 2026 pointer-to-bios <pointer-to-bios@outlook.com>
+// SPDX-License-Identifier: MIT
+
+#include "adrift/meta.h"
+#include "adrift/test/test.h"
+#include "text.h"
+
+#define DESERIALIZE(T, text)                                                  \
+    (*[] {                                                                    \
+        auto _r = deserialize<T, TextSource>(ustr{text});                     \
+        ADRIFT_SYNC_ASSERT(_r.has_value(), "deserialization returned error"); \
+        return _r;                                                            \
+    }())
+
+#include <array>
+#include <expected>
+#include <optional>
+#include <string_view>
+#include <type_traits>
+#include <vector>
+
+namespace {
+
+using adrift::ustr;
+using adrift::serde::deserialize;
+using adrift::serde::serialize;
+using adrift::serde::TextSource;
+using adrift::serde::TextTarget;
+using namespace std::string_view_literals;
+
+enum class serde_text_test_color { red, green, blue };
+
+struct serde_text_test_inner {
+    int value;
+    bool enabled;
+};
+
+struct serde_text_test_outer {
+    int number;
+    double ratio;
+    bool flag;
+    serde_text_test_color color;
+    serde_text_test_inner inner;
+    std::vector<int> items;
+};
+
+struct serde_text_test_with_private {
+    int public_value;
+
+    constexpr serde_text_test_with_private(int public_value, int private_value)
+            : public_value{public_value}
+            , private_value{private_value} {}
+
+private:
+    int private_value;
+};
+
+struct[[= adrift::serde::customized]] serde_text_test_marked_fields {
+    [[= adrift::serde::field]] int kept = 7;
+    int dropped = 8;
+    [[= adrift::serde::field]] bool enabled = true;
+};
+
+template<typename T>
+struct serde_text_test_plus_thousand {
+    void serialize(const T &value, auto &target) const { target.serialize_integral(value + 1000); }
+    template<typename U>
+    auto deserialize(U &value, auto &source) const
+        -> std::expected<void, typename std::remove_cvref_t<decltype(source)>::error_type> {
+        if (auto r = source.template deserialize_integral<U>(value); !r) {
+            return r;
+        }
+        value = value - 1000;
+        return {};
+    }
+};
+
+static_assert(adrift::serde::Customizer<serde_text_test_plus_thousand>);
+
+struct serde_text_test_field_customized {
+    [[= adrift::serde::customize<serde_text_test_plus_thousand>]] int value = 42;
+};
+
+template<typename T>
+adrift::ustr serialize_to_text(const T &value) {
+    return serialize<TextTarget>(value);
+}
+
+static_assert(adrift::meta::has_annotation(^^serde_text_test_marked_fields, adrift::serde::customized));
+static_assert(adrift::meta::has_annotation(^^serde_text_test_marked_fields::kept, adrift::serde::field));
+static_assert(!adrift::meta::has_annotation(^^serde_text_test_marked_fields::dropped, adrift::serde::field));
+static_assert(std::meta::annotations_of(^^serde_text_test_marked_fields).size() == 1);
+static_assert(std::meta::annotations_of(^^serde_text_test_marked_fields::kept).size() == 1);
+static_assert(std::meta::is_annotation(std::meta::annotations_of(^^serde_text_test_marked_fields)[0]));
+static_assert(
+    std::meta::constant_of(std::meta::annotations_of (^^serde_text_test_marked_fields)[0])
+    == std::meta::reflect_constant(adrift::serde::customized));
+static_assert(
+    std::meta::constant_of(std::meta::annotations_of(^^serde_text_test_marked_fields::kept)[0])
+    == std::meta::reflect_constant(adrift::serde::field));
+static_assert(adrift::meta::has_template_annotation<
+              ^^serde_text_test_field_customized::value, ^^adrift::serde::customize>());
+
+ADRIFT_SYNC_TEST(text_target_serializes_direct_supported_categories) {
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(true).view() == "true"sv, "bool values should use literal true/false");
+    ADRIFT_SYNC_ASSERT(serialize_to_text(42).view() == "42"sv, "integral values should format as decimal");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(2.5).view() == "2.5"sv,
+        "floating-point values should be forwarded to the target formatter");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(serde_text_test_color::green).view() == "serde_text_test_color::green"sv,
+        "enum values should use their reflected enumerator name");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(std::vector<int>{1, 2, 3}).view() == "[1,2,3,]"sv,
+        "ranges should include each serialized element");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_serializes_nested_objects) {
+    const auto serialized = serialize_to_text(
+        serde_text_test_outer{
+            .number = 7,
+            .ratio = 2.5,
+            .flag = true,
+            .color = serde_text_test_color::blue,
+            .inner = serde_text_test_inner{.value = 11, .enabled = false},
+            .items = {1, 2, 3}});
+
+    ADRIFT_SYNC_ASSERT(
+        serialized.view()
+            == "serde_text_test_outer{number:7,ratio:2.5,flag:true,color:serde_text_test_color::blue,inner:serde_text_test_inner{value:11,enabled:false,},items:[1,2,3,],}"sv,
+        "objects should serialize every reflected non-static data member in declaration order");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_serializes_private_members_via_unchecked_reflection) {
+    const auto serialized = serialize_to_text(serde_text_test_with_private{4, 9});
+
+    ADRIFT_SYNC_ASSERT(
+        serialized.view() == "serde_text_test_with_private{public_value:4,private_value:9,}"sv,
+        "SerializeTarget should observe private members because serde walks members with unchecked access");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_uses_placeholder_name_for_unnamed_types) {
+    const auto serialized = [] {
+        struct {
+            int count;
+            bool ready;
+        } value{.count = 3, .ready = true};
+        return serialize_to_text(value);
+    }();
+
+    ADRIFT_SYNC_ASSERT(
+        serialized.view() == "<unnamed>{count:3,ready:true,}"sv,
+        "types without an identifier should serialize with the unnamed placeholder");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_class_level_customize_only_keeps_marked_fields) {
+    const auto serialized = serialize_to_text(serde_text_test_marked_fields{});
+
+    ADRIFT_SYNC_ASSERT(
+        serialized.view() == "serde_text_test_marked_fields{kept:7,enabled:true,}"sv,
+        "[[=serde::customize]] should limit serialization to members explicitly marked with [[=serde::field]]");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_field_customizer_controls_field_output) {
+    const auto serialized = serialize_to_text(serde_text_test_field_customized{});
+
+    ADRIFT_SYNC_ASSERT(
+        serialized.view() == "serde_text_test_field_customized{value:1042,}"sv,
+        "[[=serde::customized<...>]] should delegate field serialization to the customizer");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+struct serde_empty_struct {};
+
+ADRIFT_SYNC_TEST(text_target_serializes_empty_struct) {
+    const auto serialized = serialize_to_text(serde_empty_struct{});
+
+    ADRIFT_SYNC_ASSERT(
+        serialized.view() == "serde_empty_struct{}"sv,
+        "empty structs should produce type name followed by empty braces");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_serializes_empty_range) {
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(std::vector<int>{}).view() == "[]"sv,
+        "empty vector should produce empty brackets with no trailing comma");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(std::vector<double>{}).view() == "[]"sv,
+        "empty vector of floating-point should also produce empty brackets");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_serializes_integer_edge_cases) {
+    ADRIFT_SYNC_ASSERT(serialize_to_text(0).view() == "0"sv, "zero should serialize as '0'");
+    ADRIFT_SYNC_ASSERT(serialize_to_text(-1).view() == "-1"sv, "negative one should serialize as '-1'");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(-42).view() == "-42"sv, "negative numbers should include minus sign");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(9223372036854775807LL).view() == "9223372036854775807"sv,
+        "large positive int64 should serialize correctly");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_serializes_various_integer_types) {
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(uint8_t{255}).view() == "255"sv, "uint8_t max should serialize correctly");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(uint16_t{65535}).view() == "65535"sv, "uint16_t should serialize correctly");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(uint32_t{42}).view() == "42"sv, "uint32_t should serialize correctly");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(uint64_t{0}).view() == "0"sv, "uint64_t zero should serialize correctly");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(int8_t{-128}).view() == "-128"sv, "int8_t min should serialize correctly");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_serializes_floating_point_edge_cases) {
+    ADRIFT_SYNC_ASSERT(serialize_to_text(0.0).view() == "0"sv, "float zero should serialize as '0'");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(-3.14).view() == "-3.14"sv, "negative float should include minus sign");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(0.5).view() == "0.5"sv, "float between 0 and 1 should serialize correctly");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_serializes_nested_ranges) {
+    const auto serialized = serialize_to_text(std::vector<std::vector<int>>{{1, 2}, {3, 4, 5}, {}});
+
+    ADRIFT_SYNC_ASSERT(
+        serialized.view() == "[[1,2,],[3,4,5,],[],]"sv,
+        "nested vectors should recursively serialize, including empty inner vectors");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_serializes_std_array) {
+    const auto serialized = serialize_to_text(std::array<int, 4>{10, 20, 30, 40});
+
+    ADRIFT_SYNC_ASSERT(
+        serialized.view() == "[10,20,30,40,]"sv,
+        "std::array should serialize identically to vector of same elements");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_serializes_optional_with_value) {
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(std::optional<int>{42}).view() == "optional##42"sv,
+        "optional with value should emit nonnull prefix then the value");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(std::optional<bool>{false}).view() == "optional##false"sv,
+        "optional bool with value should serialize correctly");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_serializes_optional_nullopt) {
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(std::optional<int>{}).view() == "optional##nullopt"sv,
+        "empty optional should emit nullopt sentinel with no value");
+    ADRIFT_SYNC_ASSERT(
+        serialize_to_text(std::optional<double>{}).view() == "optional##nullopt"sv,
+        "empty optional of any type should emit the same nullopt sentinel");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+struct serde_optional_struct {
+    int id;
+    std::optional<int> maybe_score;
+};
+
+ADRIFT_SYNC_TEST(text_target_serializes_optional_inside_object) {
+    const auto with_value = serialize_to_text(serde_optional_struct{.id = 1, .maybe_score = 100});
+    ADRIFT_SYNC_ASSERT(
+        with_value.view() == "serde_optional_struct{id:1,maybe_score:optional##100,}"sv,
+        "optional field with value should nest inside class serialization");
+
+    const auto without_value = serialize_to_text(serde_optional_struct{.id = 2, .maybe_score = {}});
+    ADRIFT_SYNC_ASSERT(
+        without_value.view() == "serde_optional_struct{id:2,maybe_score:optional##nullopt,}"sv,
+        "nullopt field should also nest correctly inside class serialization");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_target_serializes_optional_of_range) {
+    const auto with_vec = serialize_to_text(std::optional<std::vector<int>>{std::vector{7, 8, 9}});
+    ADRIFT_SYNC_ASSERT(
+        with_vec.view() == "optional##[7,8,9,]"sv,
+        "optional<vector> with value should serialize vector inside optional wrapper");
+
+    const auto null_vec = serialize_to_text(std::optional<std::vector<int>>{});
+    ADRIFT_SYNC_ASSERT(
+        null_vec.view() == "optional##nullopt"sv, "empty optional<vector> should emit nullopt");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+struct[[= adrift::serde::customized]] serde_text_test_mixed_annotations {
+    [[= adrift::serde::field]] int normal = 1;
+    [[= adrift::serde::field]][[= adrift::serde::customize<serde_text_test_plus_thousand>]] int boosted =
+        100;
+    int skipped = 999;
+    [[= adrift::serde::field]] bool active = true;
+};
+
+ADRIFT_SYNC_TEST(text_target_handles_mixed_annotations) {
+    const auto serialized = serialize_to_text(serde_text_test_mixed_annotations{});
+
+    ADRIFT_SYNC_ASSERT(
+        serialized.view() == "serde_text_test_mixed_annotations{normal:1,boosted:1100,active:true,}"sv,
+        "mix of [[=field]] and [[=customized<...>]] should coexist, skipped fields should be absent");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+struct[[= adrift::serde::customized]] serde_text_test_reordered_fields {
+    int first = 1;
+    [[= adrift::serde::field]] int middle = 2;
+    [[= adrift::serde::field]] int last = 3;
+};
+
+ADRIFT_SYNC_TEST(text_target_preserves_declaration_order_for_marked_fields) {
+    const auto serialized = serialize_to_text(serde_text_test_reordered_fields{});
+
+    ADRIFT_SYNC_ASSERT(
+        serialized.view() == "serde_text_test_reordered_fields{middle:2,last:3,}"sv,
+        "marked fields should appear in declaration order, skipping unmarked fields");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+struct[[= adrift::serde::customized]] serde_text_test_all_marked {
+    [[= adrift::serde::field]] int a = 10;
+    [[= adrift::serde::field]] bool b = false;
+    [[= adrift::serde::field]] double c = 3.0;
+};
+
+ADRIFT_SYNC_TEST(text_target_all_fields_marked_behaves_like_default) {
+    const auto customized = serialize_to_text(serde_text_test_all_marked{});
+
+    ADRIFT_SYNC_ASSERT(
+        customized.view() == "serde_text_test_all_marked{a:10,b:false,c:3,}"sv,
+        "when all members are marked [[=field]], output should match the default behavior");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+struct serde_text_test_all_private {
+    constexpr serde_text_test_all_private(int x, int y)
+            : m_x{x}
+            , m_y{y} {}
+
+    int sum() const { return m_x + m_y; }
+
+private:
+    int m_x;
+    int m_y;
+};
+
+ADRIFT_SYNC_TEST(text_target_serializes_all_private_members) {
+    const auto serialized = serialize_to_text(serde_text_test_all_private{3, 7});
+
+    ADRIFT_SYNC_ASSERT(
+        serialized.view() == "serde_text_test_all_private{m_x:3,m_y:7,}"sv,
+        "unchecked access context should reach private members even when no public members exist");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+struct serde_text_test_with_range_member {
+    int tag;
+    std::vector<int> items;
+};
+
+ADRIFT_SYNC_TEST(text_target_serializes_class_with_range_member) {
+    const auto serialized =
+        serialize_to_text(serde_text_test_with_range_member{.tag = 5, .items = {10, 20, 30}});
+
+    ADRIFT_SYNC_ASSERT(
+        serialized.view() == "serde_text_test_with_range_member{tag:5,items:[10,20,30,],}"sv,
+        "range members inside a class should serialize recursively");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserializes_bool) {
+    auto r = deserialize<bool, TextSource>(ustr{"true"});
+    ADRIFT_SYNC_ASSERT(r.has_value(), "deserialization should succeed");
+    ADRIFT_SYNC_ASSERT(*r == true, "deserialized true should match literal true");
+
+    r = deserialize<bool, TextSource>(ustr{"false"});
+    ADRIFT_SYNC_ASSERT(r.has_value(), "deserialization should succeed");
+    ADRIFT_SYNC_ASSERT(*r == false, "deserialized false should match literal false");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserializes_integers) {
+    auto r = deserialize<int, TextSource>(ustr{"42"});
+    ADRIFT_SYNC_ASSERT(r.has_value() && *r == 42, "positive integer should deserialize correctly");
+    r = deserialize<int, TextSource>(ustr{"-1"});
+    ADRIFT_SYNC_ASSERT(r.has_value() && *r == -1, "negative integer should deserialize correctly");
+    r = deserialize<int, TextSource>(ustr{"0"});
+    ADRIFT_SYNC_ASSERT(r.has_value() && *r == 0, "zero should deserialize correctly");
+    r = deserialize<int, TextSource>(ustr{"-42"});
+    ADRIFT_SYNC_ASSERT(r.has_value() && *r == -42, "negative integer should include minus sign");
+
+    auto r2 = deserialize<long long, TextSource>(ustr{"9223372036854775807"});
+    ADRIFT_SYNC_ASSERT(
+        r2.has_value() && *r2 == 9223372036854775807LL, "large int64 should deserialize correctly");
+
+    auto r3 = deserialize<uint8_t, TextSource>(ustr{"255"});
+    ADRIFT_SYNC_ASSERT(
+        r3.has_value() && static_cast<int>(*r3) == 255, "uint8_t max should deserialize correctly");
+
+    auto r4 = deserialize<int8_t, TextSource>(ustr{"-128"});
+    ADRIFT_SYNC_ASSERT(r4.has_value() && *r4 == int8_t{-128}, "int8_t min should deserialize correctly");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserializes_floating_point) {
+    auto r = deserialize<double, TextSource>(ustr{"2.5"});
+    ADRIFT_SYNC_ASSERT(r.has_value() && *r == 2.5, "positive float should deserialize correctly");
+    r = deserialize<double, TextSource>(ustr{"-3.14"});
+    ADRIFT_SYNC_ASSERT(r.has_value() && *r == -3.14, "negative float should deserialize correctly");
+    r = deserialize<double, TextSource>(ustr{"0"});
+    ADRIFT_SYNC_ASSERT(r.has_value() && *r == 0.0, "zero float should deserialize");
+    r = deserialize<double, TextSource>(ustr{"0.5"});
+    ADRIFT_SYNC_ASSERT(r.has_value() && *r == 0.5, "float between 0 and 1 should deserialize correctly");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserializes_enum) {
+    auto r = deserialize<serde_text_test_color, TextSource>(ustr{"serde_text_test_color::green"});
+    ADRIFT_SYNC_ASSERT(
+        r.has_value() && *r == serde_text_test_color::green,
+        "enum should deserialize from TypeName::EnumeratorName");
+    r = deserialize<serde_text_test_color, TextSource>(ustr{"serde_text_test_color::red"});
+    ADRIFT_SYNC_ASSERT(
+        r.has_value() && *r == serde_text_test_color::red, "enum red should deserialize correctly");
+    r = deserialize<serde_text_test_color, TextSource>(ustr{"serde_text_test_color::blue"});
+    ADRIFT_SYNC_ASSERT(
+        r.has_value() && *r == serde_text_test_color::blue, "enum blue should deserialize correctly");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserializes_optional) {
+    auto with_value = deserialize<std::optional<int>, TextSource>(ustr{"optional##42"});
+    ADRIFT_SYNC_ASSERT(with_value.has_value(), "deserialization should succeed");
+    ADRIFT_SYNC_ASSERT((*with_value).has_value(), "optional##... should produce a value");
+    ADRIFT_SYNC_ASSERT(*(*with_value) == 42, "optional value should deserialize correctly");
+
+    auto nullopt = deserialize<std::optional<int>, TextSource>(ustr{"optional##nullopt"});
+    ADRIFT_SYNC_ASSERT(nullopt.has_value(), "deserialization should succeed");
+    ADRIFT_SYNC_ASSERT(!(*nullopt).has_value(), "optional##nullopt should produce nullopt");
+
+    auto bool_opt = deserialize<std::optional<bool>, TextSource>(ustr{"optional##true"});
+    ADRIFT_SYNC_ASSERT(
+        bool_opt.has_value() && (*bool_opt).has_value() && *(*bool_opt) == true,
+        "optional bool should deserialize");
+
+    auto empty_double = deserialize<std::optional<double>, TextSource>(ustr{"optional##nullopt"});
+    ADRIFT_SYNC_ASSERT(empty_double.has_value(), "deserialization should succeed");
+    ADRIFT_SYNC_ASSERT(!(*empty_double).has_value(), "nullopt of any type should produce empty optional");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserializes_range) {
+    auto vec = deserialize<std::vector<int>, TextSource>(ustr{"[1,2,3,]"});
+    ADRIFT_SYNC_ASSERT(vec.has_value(), "deserialization should succeed");
+    std::vector<int> expected{1, 2, 3};
+    ADRIFT_SYNC_ASSERT(*vec == expected, "range should deserialize all elements");
+
+    auto empty_vec = deserialize<std::vector<int>, TextSource>(ustr{"[]"});
+    ADRIFT_SYNC_ASSERT(empty_vec.has_value(), "deserialization should succeed");
+    ADRIFT_SYNC_ASSERT((*empty_vec).empty(), "empty range should deserialize to empty vector");
+
+    auto nested = deserialize<std::vector<std::vector<int>>, TextSource>(ustr{"[[1,2,],[3,4,5,],[],]"});
+    ADRIFT_SYNC_ASSERT(nested.has_value(), "deserialization should succeed");
+    std::vector<std::vector<int>> expected_nested{{1, 2}, {3, 4, 5}, {}};
+    ADRIFT_SYNC_ASSERT(*nested == expected_nested, "nested ranges should deserialize recursively");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_round_trip_nested_objects) {
+    serde_text_test_outer original{
+        .number = 7,
+        .ratio = 2.5,
+        .flag = true,
+        .color = serde_text_test_color::blue,
+        .inner = serde_text_test_inner{.value = 11, .enabled = false},
+        .items = {1, 2, 3}};
+    auto text = serialize_to_text(original);
+    auto _r_restored = deserialize<serde_text_test_outer, TextSource>(ustr{text.view()});
+    ADRIFT_SYNC_ASSERT(_r_restored.has_value(), "deserialization should succeed");
+    auto restored = *_r_restored;
+    auto re_serialized = serialize_to_text(restored);
+
+    ADRIFT_SYNC_ASSERT(
+        re_serialized.view() == text.view(),
+        "serialize 锟?deserialize 锟?serialize should produce identical text");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserializes_empty_struct) {
+    auto _r_empty = deserialize<serde_empty_struct, TextSource>(ustr{"serde_empty_struct{}"});
+    ADRIFT_SYNC_ASSERT(_r_empty.has_value(), "deserialization should succeed");
+    auto empty = *_r_empty;
+    auto re_serialized = serialize_to_text(empty);
+
+    ADRIFT_SYNC_ASSERT(
+        re_serialized.view() == "serde_empty_struct{}"sv, "empty struct should survive round-trip unchanged");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserializes_marked_fields) {
+    auto _r_restored = deserialize<serde_text_test_marked_fields, TextSource>(
+        ustr{"serde_text_test_marked_fields{kept:7,enabled:true,}"});
+    ADRIFT_SYNC_ASSERT(_r_restored.has_value(), "deserialization should succeed");
+    auto restored = *_r_restored;
+    auto re_serialized = serialize_to_text(restored);
+
+    ADRIFT_SYNC_ASSERT(
+        re_serialized.view() == "serde_text_test_marked_fields{kept:7,enabled:true,}"sv,
+        "marked-fields class should round-trip only the [[=field]] members");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserializes_all_marked_fields) {
+    auto _r = deserialize<serde_text_test_all_marked, TextSource>(
+        ustr{"serde_text_test_all_marked{a:10,b:false,c:3,}"});
+    ADRIFT_SYNC_ASSERT(_r.has_value(), "deserialization should succeed");
+    auto restored = *_r;
+    auto re_serialized = serialize_to_text(restored);
+
+    ADRIFT_SYNC_ASSERT(
+        re_serialized.view() == "serde_text_test_all_marked{a:10,b:false,c:3,}"sv,
+        "all-fields-marked class should round-trip correctly");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_round_trip_class_with_range_member) {
+    serde_text_test_with_range_member original{.tag = 5, .items = {10, 20, 30}};
+    auto text = serialize_to_text(original);
+    auto _r_restored = deserialize<serde_text_test_with_range_member, TextSource>(ustr{text.view()});
+    ADRIFT_SYNC_ASSERT(_r_restored.has_value(), "deserialization should succeed");
+    auto restored = *_r_restored;
+    auto re_serialized = serialize_to_text(restored);
+
+    ADRIFT_SYNC_ASSERT(
+        re_serialized.view() == text.view(), "class with range member should round-trip correctly");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_round_trip_optional_struct) {
+    {
+        serde_optional_struct original{.id = 1, .maybe_score = 100};
+        auto text = serialize_to_text(original);
+        auto _r_restored = deserialize<serde_optional_struct, TextSource>(ustr{text.view()});
+        ADRIFT_SYNC_ASSERT(_r_restored.has_value(), "deserialization should succeed");
+        auto restored = *_r_restored;
+        auto re_serialized = serialize_to_text(restored);
+        ADRIFT_SYNC_ASSERT(
+            re_serialized.view() == text.view(), "struct with optional value field should round-trip");
+    }
+    {
+        serde_optional_struct original{.id = 2, .maybe_score = {}};
+        auto text = serialize_to_text(original);
+        auto _r_restored = deserialize<serde_optional_struct, TextSource>(ustr{text.view()});
+        ADRIFT_SYNC_ASSERT(_r_restored.has_value(), "deserialization should succeed");
+        auto restored = *_r_restored;
+        auto re_serialized = serialize_to_text(restored);
+        ADRIFT_SYNC_ASSERT(
+            re_serialized.view() == text.view(), "struct with optional nullopt field should round-trip");
+    }
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserializes_optional_of_range) {
+    auto _r_with_vec = deserialize<std::optional<std::vector<int>>, TextSource>(ustr{"optional##[7,8,9,]"});
+    ADRIFT_SYNC_ASSERT(_r_with_vec.has_value(), "deserialization should succeed");
+    auto with_vec = *_r_with_vec;
+    ADRIFT_SYNC_ASSERT(with_vec.has_value(), "optional<vector> with value should have a value");
+    std::vector<int> expected{7, 8, 9};
+    ADRIFT_SYNC_ASSERT(*with_vec == expected, "optional<vector> should deserialize inner vector");
+
+    auto _r_null_vec = deserialize<std::optional<std::vector<int>>, TextSource>(ustr{"optional##nullopt"});
+    ADRIFT_SYNC_ASSERT(_r_null_vec.has_value(), "deserialization should succeed");
+    auto null_vec = *_r_null_vec;
+    ADRIFT_SYNC_ASSERT(!null_vec.has_value(), "optional<vector> nullopt should produce nullopt");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_round_trip_unnamed_type) {
+    struct {
+        int count;
+        bool ready;
+    } original{.count = 3, .ready = true};
+    auto text = serialize_to_text(original);
+    auto _r_restored = deserialize<std::remove_cvref_t<decltype(original)>, TextSource>(ustr{text.view()});
+    ADRIFT_SYNC_ASSERT(_r_restored.has_value(), "deserialization should succeed");
+    auto restored = *_r_restored;
+    auto re_serialized = serialize_to_text(restored);
+
+    ADRIFT_SYNC_ASSERT(
+        re_serialized.view() == text.view(),
+        "unnamed types should round-trip correctly with <unnamed> placeholder");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_round_trip_field_customized) {
+    serde_text_test_field_customized original{};
+    auto text = serialize_to_text(original);
+    auto _r_restored = deserialize<serde_text_test_field_customized, TextSource>(ustr{text.view()});
+    ADRIFT_SYNC_ASSERT(_r_restored.has_value(), "deserialization should succeed");
+    auto restored = *_r_restored;
+    auto re_serialized = serialize_to_text(restored);
+
+    ADRIFT_SYNC_ASSERT(
+        re_serialized.view() == text.view(),
+        "[[=customize<C>]] field should round-trip through customizer serialize and deserialize");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_round_trip_mixed_annotations) {
+    serde_text_test_mixed_annotations original{};
+    auto text = serialize_to_text(original);
+    auto _r_restored = deserialize<serde_text_test_mixed_annotations, TextSource>(ustr{text.view()});
+    ADRIFT_SYNC_ASSERT(_r_restored.has_value(), "deserialization should succeed");
+    auto restored = *_r_restored;
+    auto re_serialized = serialize_to_text(restored);
+
+    ADRIFT_SYNC_ASSERT(
+        re_serialized.view() == text.view(),
+        "mix of [[=field]] and [[=customize<C>]] should round-trip correctly");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_round_trip_reordered_fields) {
+    serde_text_test_reordered_fields original{};
+    auto text = serialize_to_text(original);
+    auto _r_restored = deserialize<serde_text_test_reordered_fields, TextSource>(ustr{text.view()});
+    ADRIFT_SYNC_ASSERT(_r_restored.has_value(), "deserialization should succeed");
+    auto restored = *_r_restored;
+    auto re_serialized = serialize_to_text(restored);
+
+    ADRIFT_SYNC_ASSERT(
+        re_serialized.view() == text.view(),
+        "marked fields in declaration order should round-trip correctly");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserialize_into_existing_value) {
+    int value = 0;
+    auto ok = deserialize<int, TextSource>(ustr{"42"}, value);
+    ADRIFT_SYNC_ASSERT(ok.has_value(), "deserialize should succeed");
+
+    ADRIFT_SYNC_ASSERT(value == 42, "deserialize(payload, value) should write into existing variable");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserialize_with_direct_source) {
+    TextSource source;
+    source.provide_source(ustr{"[1,2,3,]"});
+    std::vector<int> value;
+    auto ok = deserialize(source, value);
+    ADRIFT_SYNC_ASSERT(ok.has_value(), "direct source deserialize should succeed");
+
+    std::vector<int> expected{1, 2, 3};
+    ADRIFT_SYNC_ASSERT(value == expected, "deserialize(source, value) should fill pre-constructed value");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserialize_overwrites_existing) {
+    bool value = true;
+    auto ok = deserialize<bool, TextSource>(ustr{"false"}, value);
+    ADRIFT_SYNC_ASSERT(ok.has_value(), "deserialize should succeed");
+
+    ADRIFT_SYNC_ASSERT(value == false, "deserialize(payload, value) should overwrite existing bool");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+ADRIFT_SYNC_TEST(text_source_deserialize_optional_clears_existing) {
+    std::optional<int> value{999};
+    auto ok = deserialize<std::optional<int>, TextSource>(ustr{"optional##nullopt"}, value);
+    ADRIFT_SYNC_ASSERT(ok.has_value(), "deserialize should succeed");
+
+    ADRIFT_SYNC_ASSERT(!value.has_value(), "writing nullopt should clear existing optional value");
+    ADRIFT_SYNC_SUCCESS();
+}
+
+}  // namespace

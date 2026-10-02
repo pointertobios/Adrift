@@ -1,10 +1,10 @@
 // Copyright (C) 2026 pointer-to-bios <pointer-to-bios@outlook.com>
 // SPDX-License-Identifier: MIT
 
-#include "jungle/core/application.h"
-#include "jungle/tasks/runtime/runtime.h"
+#include "adrift/core/application.h"
+#include "adrift/tasks/runtime/runtime.h"
 
-using namespace jungle;
+using namespace adrift;
 
 int main() {
     string_id services[] = {string_id{"Game"}, string_id{"Logging"}, string_id{"Asset"}};

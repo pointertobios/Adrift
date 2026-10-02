@@ -1,0 +1,54 @@
+// Copyright (C) 2026 pointer-to-bios <pointer-to-bios@outlook.com>
+// SPDX-License-Identifier: MIT
+
+#pragma once
+
+#include <memory>
+#include <span>
+#include <vector>
+
+#include "adrift/assert.h"
+#include "adrift/container/hash_map.h"
+#include "adrift/core/component/motion.h"
+#include "adrift/core/component/transform.h"
+#include "adrift/core/ecs/component.h"
+#include "adrift/core/ecs/manager.h"
+#include "adrift/types/string_id.h"
+
+namespace adrift::core {
+
+class Level {
+public:
+    Level(std::span<string_id> using_components);
+
+    auto get_managers() const { return m_managers.view(); }
+
+    template<ecs::ComponentManager M>
+    bool has_manager() const {
+        return m_managers.contains(type_id::of<M>());
+    }
+
+    bool has_manager(type_id type) const { return m_managers.contains(type); }
+
+    template<ecs::ComponentManager M>
+    M &get_manager() {
+        ADRIFT_ASSERT(has_manager<M>());
+        return m_managers.get(type_id::of<M>())->template as<M>();
+    }
+
+    ecs::Manager<> &get_manager(type_id type) {
+        ADRIFT_ASSERT(has_manager(type));
+        return **m_managers.get(type);
+    }
+
+    template<ecs::ComponentImpl C>
+        requires(has_manager<ecs::Manager<C>>())
+    ecs::Manager<C> &get_manager_of_component() {
+        return static_cast<ecs::Manager<C>>(**m_managers.get(type_id::of<ecs::Manager<C>>()));
+    }
+
+private:
+    hash_map<type_id, std::unique_ptr<ecs::Manager<>>> m_managers;
+};
+
+};  // namespace adrift::core

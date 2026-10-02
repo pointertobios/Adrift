@@ -1,7 +1,7 @@
 # Copyright (C) 2026 pointer-to-bios <pointer-to-bios@outlook.com>
 # SPDX-License-Identifier: MIT
 
-# jungle_collect_files(<out_var>
+# adrift_collect_files(<out_var>
 #     INCLUDE_DIR <dir>
 #     PATTERNS <glob>...
 #     [EXCLUDE <path>...]
@@ -12,23 +12,23 @@
 #
 # EXCLUDE entries may be given as absolute paths or as paths relative to
 # INCLUDE_DIR; a directory entry excludes the directory itself and everything
-# below it. Matching is component-aware, so excluding "jungle/test" does not
-# affect a sibling named "jungle/testing".
+# below it. Matching is component-aware, so excluding "adrift/test" does not
+# affect a sibling named "adrift/testing".
 #
 # The absolute paths of the remaining files are returned through <out_var> in
 # the order produced by the glob (callers that need a stable order sort the
 # result themselves).
-function(jungle_collect_files out_var)
+function(adrift_collect_files out_var)
     set(options)
     set(oneValueArgs INCLUDE_DIR)
     set(multiValueArgs PATTERNS EXCLUDE)
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     if(NOT ARG_INCLUDE_DIR)
-        message(FATAL_ERROR "jungle_collect_files: INCLUDE_DIR is required")
+        message(FATAL_ERROR "adrift_collect_files: INCLUDE_DIR is required")
     endif()
     if(NOT ARG_PATTERNS)
-        message(FATAL_ERROR "jungle_collect_files: PATTERNS is required")
+        message(FATAL_ERROR "adrift_collect_files: PATTERNS is required")
     endif()
 
     get_filename_component(_include_dir_abs "${ARG_INCLUDE_DIR}" ABSOLUTE)

@@ -1,0 +1,138 @@
+// Copyright (C) 2026 pointer-to-bios <pointer-to-bios@outlook.com>
+// SPDX-License-Identifier: MIT
+
+#include "adrift/os/shared_memory.h"
+
+#include <atomic>
+#include <optional>
+#include <string>
+#include <string_view>
+
+#ifndef NOMINMAX
+#    define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
+#include "adrift/build_id.h"
+#include "adrift/constants.h"
+
+namespace adrift::os {
+
+namespace {
+
+struct win_shm {
+    HANDLE mapping;
+    void *addr;
+    usize total_size;
+};
+
+constexpr usize header_size() { return sizeof(shm_header); }
+
+usize calc_total(usize user_size) { return header_size() + user_size; }
+
+shm_header *get_header(void *addr) { return static_cast<shm_header *>(addr); }
+
+void *get_user_data(void *addr) { return static_cast<i8 *>(addr) + header_size(); }
+
+std::wstring to_wstring(std::string_view utf8) {
+    if (utf8.empty()) {
+        return {};
+    }
+    int len = ::MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    std::wstring result(len, L'\0');
+    ::MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), result.data(), len);
+    return result;
+}
+
+};  // namespace
+
+std::optional<shared_memory> shared_memory::create(const ustr &name, usize size) {
+    std::wstring wname = to_wstring(name.view());
+    usize total = calc_total(size);
+
+    HANDLE h = ::CreateFileMappingW(
+        INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, static_cast<DWORD>(total >> 32),
+        static_cast<DWORD>(total & 0xFFFFFFFF), wname.c_str());
+
+    if (!h) {
+        return std::nullopt;
+    }
+
+    bool already_exists = (::GetLastError() == ERROR_ALREADY_EXISTS);
+    if (already_exists) {
+        ::CloseHandle(h);
+        return std::nullopt;
+    }
+
+    void *addr = ::MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, total);
+    if (!addr) {
+        ::CloseHandle(h);
+        return std::nullopt;
+    }
+
+    new (addr) shm_header{size, 1, adrift::build_id()};
+
+    win_shm shm{h, addr, total};
+    return shared_memory{true}.with_extra(erased{std::move(shm)});
+}
+
+std::optional<shared_memory> shared_memory::attach(const ustr &name) {
+    std::wstring wname = to_wstring(name.view());
+
+    HANDLE h = ::OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, wname.c_str());
+    if (!h) {
+        return std::nullopt;
+    }
+
+    void *addr = ::MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+    if (!addr) {
+        ::CloseHandle(h);
+        return std::nullopt;
+    }
+
+    auto *hdr = get_header(addr);
+    if (hdr->build_id != adrift::build_id()) {
+        ::UnmapViewOfFile(addr);
+        ::CloseHandle(h);
+        return std::nullopt;
+    }
+    hdr->holder_count.fetch_add(1, morder::relaxed);
+
+    usize total = calc_total(hdr->size);
+
+    win_shm shm{h, addr, total};
+    return shared_memory{false}.with_extra(erased{std::move(shm)});
+}
+
+shared_memory::~shared_memory() {
+    if (!m_extra) {
+        return;
+    }
+
+    auto &shm = m_extra.get<win_shm>();
+    auto *hdr = get_header(shm.addr);
+
+    usize cnt = hdr->holder_count.fetch_sub(1, morder::relaxed) - 1;
+
+    if (cnt == 0 && m_dtor) {
+        m_dtor(get());
+    }
+
+    ::UnmapViewOfFile(shm.addr);
+    ::CloseHandle(shm.mapping);
+}
+
+usize shared_memory::size() const {
+    auto &shm = m_extra.get<win_shm>();
+    return get_header(shm.addr)->size;
+}
+
+void *shared_memory::get() const {
+    auto &shm = m_extra.get<win_shm>();
+    return get_user_data(shm.addr);
+}
+
+};  // namespace adrift::os

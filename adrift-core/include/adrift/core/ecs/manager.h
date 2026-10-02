@@ -1,0 +1,137 @@
+// Copyright (C) 2026 pointer-to-bios <pointer-to-bios@outlook.com>
+// SPDX-License-Identifier: MIT
+
+#pragma once
+
+#include <concepts>
+#include <functional>
+#include <memory>
+#include <tuple>
+#include <vector>
+
+#include "adrift/assert.h"
+#include "adrift/core/ecs/component.h"
+#include "adrift/core/ecs/component_storage.h"
+#include "adrift/core/ecs/entity.h"
+#include "adrift/types/string_id.h"
+#include "adrift/util/type_mutate.h"
+
+namespace adrift::core::ecs {
+
+template<typename = void>
+class Manager;
+
+template<typename M>
+concept ComponentManager = std::derived_from<M, Manager<>> && !std::is_same_v<M, Manager<>>;
+
+using ManagerCreator = std::tuple<type_id, std::unique_ptr<Manager<>>> (*)();
+
+template<>
+class Manager<> : public util::type_mutate<Manager<>> {
+public:
+    template<typename C>
+    static constexpr bool static_mutatable = ComponentManager<C>;
+
+    static ManagerCreator get_manager_creator(string_id name) {
+        auto res = s_creators_of_component.get(name);
+        ADRIFT_ASSERT(res);
+        return *res;
+    }
+
+    std::string_view name() const { return m_component_name; }
+
+    virtual std::vector<std::reference_wrapper<Component<>>> vget_components() = 0;
+    virtual std::vector<std::reference_wrapper<const Component<>>> vget_components() const = 0;
+
+    virtual std::vector<std::reference_wrapper<Component<>>> vget_components(Entity entity) = 0;
+    virtual std::vector<std::reference_wrapper<const Component<>>> vget_components(Entity entity) const = 0;
+
+protected:
+    constexpr Manager(type_id type, std::string_view component_name)
+            : util::type_mutate<Manager<>>{type}
+            , m_component_name{component_name} {}
+
+    static void reigster_manager_creator(string_id name, ManagerCreator creator) {
+        auto res = s_creators_of_component.insert(name, creator);
+        ADRIFT_ASSERT(res);
+    }
+
+private:
+    const std::string_view m_component_name;
+
+    inline static hash_map<string_id, ManagerCreator> s_creators_of_component{};
+};
+
+template<ComponentImpl C>
+class Manager<C> final : public Manager<> {
+public:
+    static ManagerCreator register_creator() {
+        auto crtor = +[] -> std::tuple<type_id, std::unique_ptr<Manager<>>> {
+            return {type_id::of<Manager<C>>(), std::make_unique<Manager>()};
+        };
+        Manager<>::reigster_manager_creator(string_id{std::meta::identifier_of(^^C)}, crtor);
+        return crtor;
+    }
+
+    constexpr Manager()
+            : Manager<>{type_id::of<Manager<C>>(), std::meta::identifier_of(^^C)} {}
+
+    template<typename... Args>
+    C &create(ComponentID id, Args &&...args) {
+        return m_storage.create(id, std::forward<Args>(args)...);
+    }
+
+    void destroy(ComponentID id) { m_storage.destroy(id); }
+
+    C &get_component(ComponentID id) { return m_storage.get_component(id); }
+    const C &get_component(ComponentID id) const { return m_storage.get_component(id); }
+
+    auto get_components() { return m_storage.get_components(); }
+    auto get_components() const { return m_storage.get_components(); }
+
+    auto get_components(Entity entity) { return m_storage.get_components(entity); }
+    auto get_components(Entity entity) const { return m_storage.get_components(entity); }
+
+    std::vector<std::reference_wrapper<Component<>>> vget_components() override {
+        std::vector<std::reference_wrapper<Component<>>> result;
+        for (auto &c : get_components()) {
+            result.push_back(std::ref(c));
+        }
+        return result;
+    }
+
+    std::vector<std::reference_wrapper<const Component<>>> vget_components() const override {
+        std::vector<std::reference_wrapper<const Component<>>> result;
+        for (const auto &c : get_components()) {
+            result.push_back(std::cref(c));
+        }
+        return result;
+    }
+
+    std::vector<std::reference_wrapper<Component<>>> vget_components(Entity entity) override {
+        std::vector<std::reference_wrapper<Component<>>> result;
+        for (auto &c : get_components(entity)) {
+            result.push_back(std::ref(c));
+        }
+        return result;
+    }
+
+    std::vector<std::reference_wrapper<const Component<>>> vget_components(Entity entity) const override {
+        std::vector<std::reference_wrapper<const Component<>>> result;
+        for (const auto &c : get_components(entity)) {
+            result.push_back(std::cref(c));
+        }
+        return result;
+    }
+
+private:
+    C::Storage m_storage;
+};
+
+#define adrift_core_ecs_register_component(comp_impl)                    \
+    namespace __registration_of_##comp_impl {                            \
+        inline ::adrift::core::ecs::ManagerCreator creator =             \
+            ::adrift::core::ecs::Manager<comp_impl>::register_creator(); \
+    }
+
+};  // namespace adrift::core::ecs

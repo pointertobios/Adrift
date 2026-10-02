@@ -1,0 +1,914 @@
+#!/usr/bin/env python3
+# Copyright (C) 2026 pointer-to-bios <pointer-to-bios@outlook.com>
+# SPDX-License-Identifier: MIT
+
+"""Manage Adrift CMake projects and their dependencies."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import NoReturn
+from urllib.parse import urlparse
+
+
+TARGET_PATTERN = re.compile(
+    r"\b(add_(?:executable|library))\s*\(\s*([A-Za-z_][A-Za-z0-9_.+:-]*)",
+    re.IGNORECASE,
+)
+ALIAS_PATTERN = re.compile(
+    r"\badd_library\s*\(\s*([A-Za-z_][A-Za-z0-9_.+:-]*)\s+ALIAS\s*"
+    r"([A-Za-z_][A-Za-z0-9_.+:-]*)",
+    re.IGNORECASE,
+)
+runtime = {"verbose": False}
+
+
+@dataclass(frozen=True)
+class Target:
+    name: str
+    project: Path
+    cmake_file: Path
+    kind: str
+    aliases: tuple[str, ...]
+
+    @property
+    def qualified_name(self) -> str:
+        return f"{self.project.as_posix()}:{self.name}"
+
+    @property
+    def link_name(self) -> str:
+        return next(
+            (alias for alias in self.aliases if alias.startswith("adrift::")),
+            self.name,
+        )
+
+
+def fail(message: str) -> NoReturn:
+    raise SystemExit(f"adftproj: error: {message}")
+
+
+def progress(message: str) -> None:
+    if runtime["verbose"]:
+        print(f"adftproj: {message}", file=sys.stderr)
+
+
+def repository_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def metadata_path(root: Path) -> Path:
+    return root / ".adftproj" / "metadata"
+
+
+@contextlib.contextmanager
+def project_lock(root: Path):
+    lock_path = root / ".adftproj" / "lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    while lock_path.exists():
+        time.sleep(0.1)
+    lock_path.touch()
+    try:
+        yield
+    finally:
+        lock_path.unlink(missing_ok=True)
+
+
+def load_metadata(root: Path) -> dict[str, object]:
+    path = metadata_path(root)
+    if not path.exists():
+        progress(f"读取元数据: {path}（不存在，使用空配置）")
+        return {"third_party": {}}
+    progress(f"读取元数据: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        fail(f"无法解析 .adftproj: {error}")
+    if not isinstance(data, dict):
+        fail(".adftproj 顶层必须是对象")
+    third_party = data.get("third_party", {})
+    if not isinstance(third_party, dict):
+        fail(".adftproj 的 third_party 必须是对象")
+    return data
+
+
+def remove_readonly(func, path, _error) -> None:
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def save_metadata(root: Path, data: dict[str, object]) -> None:
+    metadata_path(root).parent.mkdir(parents=True, exist_ok=True)
+    progress(f"写入元数据: {metadata_path(root)}")
+    metadata_path(root).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def virtual_project_name(value: str) -> str:
+    normalized = value.replace("\\", "/").strip("/")
+    if not normalized or normalized in {".", ".."}:
+        fail(f"虚拟项目名称无效: {value}")
+    if any(part in {".", ".."} for part in normalized.split("/")):
+        fail(f"虚拟项目名称不能包含 . 或 ..: {value}")
+    return normalized
+
+
+def get_virtual_project(root: Path, name: str) -> dict[str, object] | None:
+    projects = load_metadata(root)["third_party"]
+    if not isinstance(projects, dict):
+        fail(".adftproj 的 third_party 必须是对象")
+    project = projects.get(name)
+    if project is not None and not isinstance(project, dict):
+        fail(f".adftproj 中的项目记录无效: {name}")
+    return project
+
+
+def cmake_identifier(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_]", "_", name)
+
+
+def resolve_filesystem_path(root: Path, name: str) -> Path:
+    candidate = Path(name)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    return candidate.resolve()
+
+
+def third_party_path(root: Path, name: str) -> Path:
+    return root / ".adftproj" / "3rd" / Path(name)
+
+
+def validate_project_name(root: Path, name: str) -> Path:
+    normalized = virtual_project_name(name)
+    if get_virtual_project(root, normalized) is not None:
+        fail(f"项目路径与虚拟项目名称冲突: {normalized}")
+    candidate = resolve_filesystem_path(root, normalized)
+    data = load_metadata(root)
+    projects = data["third_party"]
+    if isinstance(projects, dict):
+        for project_name, project in projects.items():
+            if not isinstance(project, dict):
+                continue
+            checkout = project.get("checkout")
+            if (
+                isinstance(checkout, str)
+                and resolve_filesystem_path(root, checkout) == candidate
+            ):
+                fail(
+                    f"项目路径与虚拟项目 checkout 冲突: "
+                    f"{normalized} 与 {project_name}"
+                )
+    return candidate
+
+
+def cmake_files(root: Path) -> list[Path]:
+    ignored = {".git", "build"}
+    result: list[Path] = []
+    for path in root.rglob("CMakeLists.txt"):
+        relative_parts = path.relative_to(root).parts
+        is_ignored = any(
+            part in ignored or part.startswith("cmake-build")
+            for part in relative_parts
+        )
+        if not is_ignored:
+            result.append(path)
+    return sorted(result)
+
+
+def project_for_cmake(root: Path, cmake_file: Path) -> Path:
+    relative = cmake_file.parent.relative_to(root)
+    data = load_metadata(root)
+    projects = data["third_party"]
+    if isinstance(projects, dict):
+        for name, project in projects.items():
+            if not isinstance(project, dict):
+                continue
+            checkout = project.get("checkout")
+            if not isinstance(checkout, str):
+                continue
+            checkout_path = Path(checkout)
+            if not checkout_path.is_absolute():
+                checkout_path = root / checkout_path
+            try:
+                project_relative = cmake_file.parent.relative_to(
+                    checkout_path.resolve()
+                )
+            except ValueError:
+                continue
+            if not project_relative.parts:
+                return Path(str(name))
+    return Path(".") if not relative.parts else relative
+
+
+def read_targets(root: Path) -> list[Target]:
+    targets: list[Target] = []
+    for cmake_file in cmake_files(root):
+        project = project_for_cmake(root, cmake_file)
+        content = cmake_file.read_text(encoding="utf-8")
+        aliases: dict[str, list[str]] = {}
+        for alias, actual in ALIAS_PATTERN.findall(content):
+            aliases.setdefault(actual, []).append(alias)
+        alias_names = {
+            alias for values in aliases.values() for alias in values
+        }
+        for kind, name in TARGET_PATTERN.findall(content):
+            if name in alias_names:
+                continue
+            targets.append(
+                Target(
+                    name,
+                    project,
+                    cmake_file,
+                    kind.lower(),
+                    tuple(aliases.get(name, [])),
+                )
+            )
+    return targets
+
+
+def normalize_project_path(root: Path, project_path: str) -> tuple[Path, Path]:
+    virtual = get_virtual_project(root, project_path)
+    if virtual is not None:
+        checkout = virtual.get("checkout")
+        if not isinstance(checkout, str):
+            fail(f"虚拟项目缺少 checkout 路径: {project_path}")
+        checkout_path = Path(checkout)
+        if not checkout_path.is_absolute():
+            checkout_path = root / checkout_path
+        return checkout_path.resolve(), Path(project_path)
+    candidate = Path(project_path)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    candidate = candidate.resolve()
+    try:
+        relative = candidate.relative_to(root.resolve())
+    except ValueError:
+        fail("项目路径必须位于仓库根目录内")
+    return candidate, Path(".") if not relative.parts else relative
+
+
+def split_project_target(value: str) -> tuple[str | None, str]:
+    if ":" not in value:
+        return None, value
+    project, target = value.rsplit(":", 1)
+    if not project or not target:
+        fail(f"目标格式无效: {value}，应为 path/to/project:target")
+    return project, target
+
+
+def target_matches(target: Target, requested: str) -> bool:
+    aliases = {target.name, *target.aliases}
+    aliases.update(
+        alias.removeprefix("adrift::")
+        for alias in target.aliases
+        if alias.startswith("adrift::")
+    )
+    if target.name.startswith("adrift::"):
+        aliases.add(target.name.removeprefix("adrift::"))
+    return requested in aliases
+
+
+def resolve_target(root: Path, value: str) -> Target:
+    project_name, requested = split_project_target(value)
+    targets = read_targets(root)
+    if project_name is not None:
+        project_path, _ = normalize_project_path(root, project_name)
+        matches = [
+            target for target in targets
+            if target_matches(target, requested)
+            and target.cmake_file.parent.resolve().is_relative_to(project_path)
+        ]
+    else:
+        matches = [
+            target for target in targets if target_matches(target, requested)
+        ]
+    if not matches:
+        fail(f"找不到 target: {value}")
+    if len(matches) > 1:
+        choices = ", ".join(target.qualified_name for target in matches)
+        fail(f"target 不唯一: {value}，候选为 {choices}")
+    return matches[0]
+
+
+def add_third_party(root: Path, name: str, repository: str) -> None:
+    name = virtual_project_name(name)
+    progress(f"添加第三方项目: {name} <- {repository}")
+    checkout = third_party_path(root, name)
+    validate_project_name(root, name)
+    if resolve_filesystem_path(root, name).exists():
+        fail(f"虚拟项目名称与已有项目路径冲突: {name}")
+    data = load_metadata(root)
+    projects = data["third_party"]
+    if not isinstance(projects, dict):
+        fail(".adftproj 的 third_party 必须是对象")
+    if name in projects:
+        fail(f"虚拟项目已存在: {name}")
+    if checkout.exists():
+        fail(f"第三方项目目录已存在: {checkout}")
+    checkout.parent.mkdir(parents=True, exist_ok=True)
+    progress(f"克隆仓库（浅克隆）: {checkout}")
+    try:
+        subprocess.run(
+            ["git", "clone", "--depth", "1", repository, str(checkout)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        fail("添加第三方项目需要 git，但当前环境找不到 git")
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.strip() or "git clone 失败"
+        fail(f"无法克隆远程仓库 {repository}: {detail}")
+    normalize_cmake_minimum_required(checkout)
+    remote_targets = local_cmake_targets(checkout, repository)
+    checkout_relative = checkout.relative_to(root)
+    checkout_path = checkout.resolve()
+    for other_name, project in projects.items():
+        if not isinstance(project, dict):
+            continue
+        other_checkout = project.get("checkout")
+        if isinstance(other_checkout, str) and resolve_filesystem_path(
+            root, other_checkout
+        ) == checkout_path:
+            fail(f"第三方项目 checkout 路径冲突: {name} 与 {other_name}")
+    projects[name] = {
+        "repository": repository,
+        "checkout": checkout_relative.as_posix(),
+        "targets": remote_targets,
+    }
+    save_metadata(root, data)
+    block = (
+        f"# adftproj 3rd: {name}\n"
+        f"add_subdirectory(${{CMAKE_SOURCE_DIR}}/"
+        f"{checkout_relative.as_posix()})\n"
+    )
+    append_once(root / "CMakeLists.txt", block)
+
+
+def remove_third_party(root: Path, name: str) -> None:
+    name = virtual_project_name(name)
+    progress(f"移除第三方项目: {name}")
+    data = load_metadata(root)
+    projects = data["third_party"]
+    if not isinstance(projects, dict) or name not in projects:
+        fail(f"找不到虚拟项目: {name}")
+    project = projects[name]
+    if not isinstance(project, dict):
+        fail(f"虚拟项目元数据无效: {name}")
+    checkout = project.get("checkout")
+    if not isinstance(checkout, str):
+        fail(f"虚拟项目缺少 checkout 路径: {name}")
+    checkout_path = resolve_filesystem_path(root, checkout)
+    if checkout_path.exists():
+        progress(f"删除第三方源码目录: {checkout_path}")
+        shutil.rmtree(checkout_path, onexc=remove_readonly)
+    del projects[name]
+    save_metadata(root, data)
+    cmake_file = root / "CMakeLists.txt"
+    content = cmake_file.read_text(encoding="utf-8")
+    pattern = re.compile(
+        rf"\n?"
+        rf"# adftproj 3rd: {re.escape(name)}\n"
+        rf"add_subdirectory\(.*?\)\n?",
+        re.IGNORECASE | re.DOTALL,
+    )
+    cmake_file.write_text(pattern.sub("", content), encoding="utf-8")
+
+
+def sync_third_party(root: Path) -> None:
+    data = load_metadata(root)
+    projects = data["third_party"]
+    if not isinstance(projects, dict):
+        fail(".adftproj 的 third_party 必须是对象")
+    for name, project in projects.items():
+        if not isinstance(project, dict):
+            fail(f"虚拟项目元数据无效: {name}")
+        repository = project.get("repository")
+        checkout = project.get("checkout")
+        if not isinstance(repository, str) or not isinstance(checkout, str):
+            fail(f"虚拟项目缺少 repository 或 checkout: {name}")
+        checkout_path = resolve_filesystem_path(root, checkout)
+        if checkout_path.exists():
+            progress(f"第三方项目已存在，跳过: {checkout_path}")
+            continue
+        checkout_path.parent.mkdir(parents=True, exist_ok=True)
+        progress(f"同步第三方项目: {name} <- {repository}")
+        try:
+            subprocess.run(
+                [
+                    "git", "clone", "--depth", "1", repository,
+                    str(checkout_path),
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            fail("同步第三方项目需要 git，但当前环境找不到 git")
+        except subprocess.CalledProcessError:
+            fail(f"无法同步远程仓库 {repository}: git clone 失败")
+        normalize_cmake_minimum_required(checkout_path)
+
+
+def append_once(path: Path, block: str) -> None:
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
+    if block.strip() not in content:
+        progress(f"更新 CMake 文件: {path}")
+        separator = "" if not content or content.endswith("\n\n") else "\n"
+        path.write_text(content + separator + block, encoding="utf-8")
+
+
+def append_after_target_declaration(
+    path: Path, target_name: str, block: str
+) -> None:
+    content = path.read_text(encoding="utf-8")
+    if block.strip() in content:
+        return
+    pattern = re.compile(
+        rf"(^[ \t]*add_(?:executable|library)\(\s*"
+        rf"{re.escape(target_name)}\b(?:[^()]|\([^()]*\))*\)[ \t]*\n)",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    match = pattern.search(content)
+    if match is None:
+        fail(f"找不到 target 声明: {path}:{target_name}")
+    updated = content[:match.end()] + block + content[match.end():]
+    path.write_text(updated, encoding="utf-8")
+
+
+def cmake_targets_and_dependencies(
+    directory: Path,
+) -> tuple[set[str], set[str]]:
+    targets: set[str] = set()
+    dependencies: set[str] = set()
+    for cmake_file in directory.rglob("CMakeLists.txt"):
+        content = cmake_file.read_text(encoding="utf-8")
+        targets.update(
+            name for _, name in TARGET_PATTERN.findall(content)
+        )
+        targets.update(alias for alias, _ in ALIAS_PATTERN.findall(content))
+        for match in re.finditer(
+            r"\btarget_link_libraries\s*\((.*?)\)",
+            content,
+            re.IGNORECASE | re.DOTALL,
+        ):
+            dependencies.update(
+                token
+                for token in re.findall(
+                    r"\b[A-Za-z_][A-Za-z0-9_.+:-]*\b", match.group(1)
+                )
+                if token.startswith("adrift::")
+            )
+    return targets, dependencies
+
+
+def subdirectory_path(root: Path, value: str) -> Path:
+    value = value.strip()
+    value = value.replace("${CMAKE_SOURCE_DIR}", ".")
+    value = value.replace("${PROJECT_SOURCE_DIR}", ".")
+    return (root / value).resolve()
+
+
+def reorder_root_subdirectories(root: Path) -> None:
+    cmake_file = root / "CMakeLists.txt"
+    content = cmake_file.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r"(?:(^[ \t]*# adftproj 3rd: [^\n]+\n))?"
+        r"(^[ \t]*add_subdirectory\(([^)\n]+)\)[ \t]*\n)",
+        re.MULTILINE,
+    )
+    matches = list(pattern.finditer(content))
+    if len(matches) < 2:
+        return
+    entries = [
+        {
+            "block": match.group(0),
+            "path": subdirectory_path(root, match.group(3)),
+            "order": index,
+        }
+        for index, match in enumerate(matches)
+    ]
+    owners: dict[str, int] = {}
+    dependencies: list[set[int]] = [set() for _ in entries]
+    for index, entry in enumerate(entries):
+        targets, _ = cmake_targets_and_dependencies(entry["path"])
+        for target in targets:
+            owners[target] = index
+    for index, entry in enumerate(entries):
+        _, target_dependencies = cmake_targets_and_dependencies(
+            entry["path"]
+        )
+        dependencies[index] = {
+            owners[dependency]
+            for dependency in target_dependencies
+            if dependency in owners and owners[dependency] != index
+        }
+    remaining = set(range(len(entries)))
+    sorted_indexes: list[int] = []
+    while remaining:
+        ready = [
+            index
+            for index in remaining
+            if not dependencies[index] & remaining
+        ]
+        if not ready:
+            sorted_indexes.extend(sorted(remaining))
+            break
+        ready.sort()
+        sorted_indexes.extend(ready)
+        remaining.difference_update(ready)
+    sorted_blocks = [entries[index]["block"] for index in sorted_indexes]
+    first = matches[0].start()
+    last = matches[-1].end()
+    updated = content[:first] + "".join(sorted_blocks) + content[last:]
+    if updated != content:
+        cmake_file.write_text(updated, encoding="utf-8")
+
+
+def normalize_cmake_minimum_required(directory: Path) -> None:
+    pattern = re.compile(
+        r"(\bcmake_minimum_required\s*\(\s*VERSION\s+)"
+        r"(\d+(?:\.\d+)+)",
+        re.IGNORECASE,
+    )
+    for cmake_file in directory.rglob("CMakeLists.txt"):
+        content = cmake_file.read_text(encoding="utf-8")
+
+        def replace_version(
+            match: re.Match[str], cmake_file: Path = cmake_file
+        ) -> str:
+            version = tuple(int(part) for part in match.group(2).split("."))
+            if version >= (3, 5):
+                return match.group(0)
+            print(
+                f"adftproj: 警告: 已将 {cmake_file} 的 CMake 最低版本 "
+                f"从 {match.group(2)} 调整为 3.5",
+                file=sys.stderr,
+            )
+            return f"{match.group(1)}3.5"
+
+        updated = pattern.sub(replace_version, content)
+        if updated != content:
+            cmake_file.write_text(updated, encoding="utf-8")
+
+
+def is_remote_dependency(value: str) -> bool:
+    return bool(re.match(r"^(https?|git|ssh)://|^git@", value))
+
+
+def create_project(root: Path, value: str, kind: str) -> None:
+    project_name, target_name = split_project_target(value)
+    if project_name is None:
+        fail("new 的参数必须是 path/to/project:target")
+    project_dir = validate_project_name(root, project_name)
+    progress(f"创建项目结构: {project_dir}")
+    if get_virtual_project(root, project_name) is not None:
+        fail(f"不能在虚拟项目中创建新 project: {project_name}")
+    _, project = normalize_project_path(root, project_name)
+    if target_name.startswith("adrift::"):
+        target_name = target_name.removeprefix("adrift::")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.+-]*", target_name):
+        fail(f"target 名称无效: {target_name}")
+    if kind == "executable":
+        declaration = f"add_executable({target_name})"
+        alias = ""
+    elif kind == "static":
+        declaration = f"add_library({target_name} STATIC)"
+        alias = f"add_library(adrift::{target_name} ALIAS {target_name})\n"
+    else:
+        declaration = f"add_library({target_name} SHARED)"
+        alias = f"add_library(adrift::{target_name} ALIAS {target_name})\n"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    for directory in ("include", "src", "unit_tests"):
+        (project_dir / directory).mkdir(exist_ok=True)
+    cmake_file = project_dir / "CMakeLists.txt"
+    if cmake_file.exists() and any(
+        target.name == target_name and target.project == project
+        for target in read_targets(root)
+    ):
+        fail(f"target 已存在: {value}")
+    if not cmake_file.exists():
+        sources = f"${{{target_name.upper()}_SOURCES}}"
+        cmake_file.write_text(
+            "include(${PROJECT_SOURCE_DIR}/cmake/GeneratePch.cmake)\n"
+            "include(${PROJECT_SOURCE_DIR}/cmake/CollectFiles.cmake)\n\n"
+            "adrift_generate_pch(PRECOMPILE_HEADERS\n"
+            "    INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include\n"
+            "    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/pch.h\n"
+            ")\n\n"
+            f"adrift_collect_files({target_name.upper()}_SOURCES\n"
+            "    INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src\n"
+            '    PATTERNS "*.cpp"\n'
+            ")\n\n"
+            f"{declaration[:-1]} {sources})\n"
+            f"target_include_directories({target_name} PUBLIC include)\n"
+            f"target_precompile_headers({target_name} PUBLIC "
+            "${PRECOMPILE_HEADERS})\n"
+            f"{alias}",
+            encoding="utf-8",
+        )
+    else:
+        append_once(
+            cmake_file,
+            f"{declaration}\n"
+            f"{alias}",
+        )
+    unit_test_sources = f"{target_name.upper()}_UNIT_TEST_SOURCES"
+    unit_test_target = f"{target_name}-unit-tests"
+    unit_test_library = (
+        target_name if kind == "executable" else f"adrift::{target_name}"
+    )
+    append_once(
+        cmake_file,
+        f"\nadrift_collect_files({unit_test_sources}\n"
+        "    INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/unit_tests\n"
+        '    PATTERNS "*.cpp"\n'
+        ")\n\n"
+        f"add_executable({unit_test_target} ${{{unit_test_sources}}})\n"
+        f"target_link_libraries({unit_test_target} PUBLIC "
+        f"adrift::test {unit_test_library})\n"
+        f"add_test(NAME {unit_test_target} COMMAND {unit_test_target})\n",
+    )
+    if project != Path("."):
+        root_cmake = root / "CMakeLists.txt"
+        add_subdirectory = f"add_subdirectory({project.as_posix()})"
+        append_once(root_cmake, add_subdirectory + "\n")
+        reorder_root_subdirectories(root)
+
+
+def remote_name(url: str) -> str:
+    parsed = urlparse(url)
+    raw_name = Path(parsed.path.rstrip("/")).stem
+    name = re.sub(r"[^A-Za-z0-9_]+", "_", raw_name).strip("_")
+    if not name or not re.match(r"[A-Za-z_]", name):
+        fail(f"无法从远程仓库生成项目名称: {url}")
+    return name.lower()
+
+
+def checkout_remote_project(
+    root: Path, url: str
+) -> tuple[str, Path, list[str]]:
+    name = remote_name(url)
+    checkout = third_party_path(root, name)
+    if checkout.exists():
+        fail(f"第三方项目目录已存在: {checkout}")
+    checkout.parent.mkdir(parents=True, exist_ok=True)
+    progress(f"克隆远程 CMake 项目: {checkout}")
+    try:
+        subprocess.run(
+            ["git", "clone", "--depth", "1", url, str(checkout)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        fail("获取远程仓库需要 git，但当前环境找不到 git")
+    except subprocess.CalledProcessError:
+        fail(f"无法获取远程仓库 {url}: git clone 失败")
+    normalize_cmake_minimum_required(checkout)
+    return name, checkout, local_cmake_targets(checkout, url)
+
+
+def local_cmake_targets(directory: Path, source: str) -> list[str]:
+    files = list(directory.rglob("CMakeLists.txt"))
+    if not files:
+        fail(f"远程仓库不是 CMake 项目: {source}")
+    has_project = any(
+        re.search(
+            r"\bproject\s*\(",
+            file.read_text(encoding="utf-8"),
+            re.IGNORECASE,
+        )
+        for file in files
+    )
+    if not has_project:
+        fail(f"远程仓库缺少 CMake project() 声明: {source}")
+    targets: set[str] = set()
+    for file in files:
+        content = file.read_text(encoding="utf-8")
+        matches = TARGET_PATTERN.findall(content)
+        targets.update(name for _, name in matches)
+    if not targets:
+        fail(f"远程仓库没有声明可链接 target: {source}")
+    return sorted(targets)
+
+
+def add_dependency(
+    root: Path, target_value: str, dependency: str, visibility: str
+) -> None:
+    target = resolve_target(root, target_value)
+    data = load_metadata(root)
+    projects = data["third_party"]
+    if isinstance(projects, dict):
+        for project in projects.values():
+            if not isinstance(project, dict):
+                continue
+            targets = project.get("targets")
+            if not isinstance(targets, list):
+                continue
+            if dependency not in targets:
+                continue
+            block = (
+                f"target_link_libraries({target.name} {visibility} "
+                f"{dependency})\n"
+            )
+            append_after_target_declaration(
+                target.cmake_file, target.name, block
+            )
+            return
+    if is_remote_dependency(dependency):
+        dependency_name, checkout, remote_targets = checkout_remote_project(
+            root, dependency
+        )
+        checkout_relative = checkout.relative_to(root).as_posix()
+        block = (
+            f"# adftproj: {dependency_name} targets "
+            f"{';'.join(remote_targets)}\n"
+            f"add_subdirectory(${{CMAKE_SOURCE_DIR}}/{checkout_relative})\n"
+        )
+        append_once(root / "CMakeLists.txt", block)
+        reorder_root_subdirectories(root)
+        block = (
+            f"target_link_libraries({target.name} {visibility} "
+            f"{' '.join(remote_targets)})\n"
+        )
+    else:
+        dependency_target = resolve_target(root, dependency)
+        block = (
+            f"target_link_libraries({target.name} {visibility} "
+            f"{dependency_target.link_name})\n"
+        )
+    append_after_target_declaration(target.cmake_file, target.name, block)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="adftproj", description="管理 Adrift CMake 项目和依赖"
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="显示详细执行步骤"
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    new_parser = subparsers.add_parser("new", help="创建项目 target")
+    new_parser.add_argument("project_target", metavar="path/to/project:target")
+    new_parser.add_argument(
+        "--type",
+        choices=("executable", "static", "shared"),
+        default="static",
+        help="target 类型，默认 static",
+    )
+
+    add_parser = subparsers.add_parser("add", help="添加 target 或远程 Git 依赖")
+    add_parser.add_argument("target", metavar="target-or-path:target")
+    add_parser.add_argument("dependency", metavar="target-or-git-url")
+    visibility = add_parser.add_mutually_exclusive_group()
+    visibility.add_argument(
+        "--private",
+        dest="visibility",
+        action="store_const",
+        const="PRIVATE",
+        help="以 PRIVATE 方式链接（默认）",
+    )
+    visibility.add_argument(
+        "--public",
+        dest="visibility",
+        action="store_const",
+        const="PUBLIC",
+        help="以 PUBLIC 方式链接",
+    )
+    add_parser.set_defaults(visibility="PRIVATE")
+
+    subparsers.add_parser("sync", help="同步 metadata 中的第三方项目")
+
+    third_party_parser = subparsers.add_parser(
+        "3rd", help="管理远程第三方 CMake 项目"
+    )
+    third_party_subparsers = third_party_parser.add_subparsers(
+        dest="third_party_command", required=True
+    )
+    third_party_add = third_party_subparsers.add_parser(
+        "add", help="注册虚拟项目"
+    )
+    third_party_add.add_argument("name", metavar="virtual-project")
+    third_party_add.add_argument("repository", metavar="git-repository")
+    third_party_remove = third_party_subparsers.add_parser(
+        "remove", help="移除虚拟项目注册"
+    )
+    third_party_remove.add_argument("name", metavar="virtual-project")
+
+    remove_parser = subparsers.add_parser("remove", help="移除项目 target 或依赖")
+    remove_parser.add_argument("target", metavar="target-or-path:target")
+    remove_parser.add_argument(
+        "dependency", nargs="?", metavar="target-or-git-url"
+    )
+    return parser
+
+
+def remove_dependency(
+    root: Path, target_value: str, dependency: str | None
+) -> None:
+    target = resolve_target(root, target_value)
+    root_cmake = root / "CMakeLists.txt"
+    content = target.cmake_file.read_text(encoding="utf-8")
+    if dependency is None:
+        declaration = re.compile(
+            rf"\n?add_(?:executable|library)\(\s*{re.escape(target.name)}"
+            rf"(?:[^()]|\([^()]*\))*\)\n?"
+            rf"|\n?add_library\(\s*adrift::{re.escape(target.name)}\s+ALIAS\s*"
+            rf"{re.escape(target.name)}\s*\)\n?",
+            re.IGNORECASE | re.DOTALL,
+        )
+        updated = declaration.sub("\n", content)
+        if updated == content:
+            fail(f"找不到 target 声明: {target.qualified_name}")
+        target.cmake_file.write_text(updated, encoding="utf-8")
+        return
+    is_remote = re.match(r"^(https?|git|ssh)://|^git@", dependency)
+    if is_remote:
+        dependency_name = remote_name(dependency)
+        remote_content = root_cmake.read_text(encoding="utf-8")
+        target_pattern = re.compile(
+            rf"# adftproj: {re.escape(dependency_name)} targets "
+            r"([A-Za-z_][A-Za-z0-9_.+:-]*(?:;[A-Za-z_][A-Za-z0-9_.+:-]*)*)"
+        )
+        match = target_pattern.search(remote_content)
+        if match is None:
+            fail(f"找不到远程依赖的 adftproj 元数据: {dependency}")
+        linked_targets = match.group(1).split(";")
+    else:
+        dependency_target = resolve_target(root, dependency)
+        dependency_name = dependency_target.name
+        linked_targets = [dependency_target.link_name]
+    if is_remote:
+        remaining_users = sum(
+            sum(
+                content.read_text(encoding="utf-8").count(linked_target)
+                for linked_target in linked_targets
+            )
+            for content in cmake_files(root)
+            if content != root_cmake and content != target.cmake_file
+        )
+        if not remaining_users:
+            remote_content = root_cmake.read_text(encoding="utf-8")
+            checkout_pattern = re.compile(
+                rf"\n?"
+                rf"# adftproj: {re.escape(dependency_name)} targets "
+                r"[A-Za-z_][A-Za-z0-9_.+:-]*(?:;[A-Za-z_][A-Za-z0-9_.+:-]*)*\n"
+                rf"add_subdirectory\(.*?\)\n?",
+                re.IGNORECASE | re.DOTALL,
+            )
+            root_cmake.write_text(
+                checkout_pattern.sub("\n", remote_content), encoding="utf-8"
+            )
+            checkout = third_party_path(root, dependency_name)
+            if checkout.exists():
+                shutil.rmtree(checkout)
+    linked_pattern = "|".join(
+        re.escape(linked_target) for linked_target in linked_targets
+    )
+    pattern = re.compile(
+        rf"\ntarget_link_libraries\({re.escape(target.name)}\s+PRIVATE\s+"
+        rf"(?:{linked_pattern})+(?:\s+(?:{linked_pattern}))*\)\n?",
+        re.IGNORECASE | re.DOTALL,
+    )
+    updated = pattern.sub("\n", content)
+    if updated == content:
+        fail(f"在 {target.qualified_name} 中找不到依赖: {dependency}")
+    target.cmake_file.write_text(updated, encoding="utf-8")
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    runtime["verbose"] = args.verbose
+    root = repository_root()
+    with project_lock(root):
+        if args.command == "new":
+            create_project(root, args.project_target, args.type)
+        elif args.command == "add":
+            add_dependency(
+                root, args.target, args.dependency, args.visibility
+            )
+        elif args.command == "remove":
+            remove_dependency(root, args.target, args.dependency)
+        elif args.command == "sync":
+            sync_third_party(root)
+        elif args.third_party_command == "add":
+            add_third_party(root, args.name, args.repository)
+        else:
+            remove_third_party(root, args.name)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

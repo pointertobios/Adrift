@@ -1,11 +1,6 @@
-# Jungle
+# Adrift
 
-Jungle 是一个实验性游戏引擎，旨在探索现代 C++ 标准（C++26）在游戏开发中的应用。项目充分利用编译期反射等新特性，构建类型安全、零开销的基础设施层。
-
-## 文档
-
-- [简体中文](https://pointertobios.github.io/Jungle/zhcn/)
-- [English](https://pointertobios.github.io/Jungle/enus/)
+Adrift 是一个实验性游戏引擎，旨在探索现代 C++ 标准（C++26）在游戏开发中的应用。项目充分利用编译期反射等新特性，构建类型安全、零开销的基础设施层。
 
 ## Roadmap
 

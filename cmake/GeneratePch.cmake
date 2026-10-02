@@ -3,23 +3,23 @@
 
 include(${CMAKE_CURRENT_LIST_DIR}/CollectFiles.cmake)
 
-function(jungle_generate_pch out_var)
+function(adrift_generate_pch out_var)
     set(options)
     set(oneValueArgs INCLUDE_DIR OUTPUT)
     set(multiValueArgs EXCLUDE)
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     if(NOT ARG_INCLUDE_DIR)
-        message(FATAL_ERROR "jungle_generate_pch: INCLUDE_DIR is required")
+        message(FATAL_ERROR "adrift_generate_pch: INCLUDE_DIR is required")
     endif()
     if(NOT ARG_OUTPUT)
-        message(FATAL_ERROR "jungle_generate_pch: OUTPUT is required")
+        message(FATAL_ERROR "adrift_generate_pch: OUTPUT is required")
     endif()
 
     get_filename_component(_include_dir_abs "${ARG_INCLUDE_DIR}" ABSOLUTE)
     file(TO_CMAKE_PATH "${_include_dir_abs}" _include_dir_abs)
 
-    jungle_collect_files(_headers
+    adrift_collect_files(_headers
         INCLUDE_DIR "${_include_dir_abs}"
         PATTERNS "*.h" "*.hpp"
         EXCLUDE ${ARG_EXCLUDE}

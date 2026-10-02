@@ -1,0 +1,23 @@
+{
+  "third_party": {
+    "cpptrace": {
+      "repository": "https://github.com/jeremy-rifkin/cpptrace.git",
+      "checkout": ".adftproj/3rd/cpptrace",
+      "targets": [
+        "benchmark_unwinding",
+        "c_demo",
+        "cpptrace::cpptrace",
+        "demo",
+        "integration",
+        "integration_modules",
+        "link_test",
+        "link_test_modules",
+        "main",
+        "mydll",
+        "signal_demo",
+        "signal_tracer",
+        "speedtest"
+      ]
+    }
+  }
+}

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 4.0)
-project(Jungle VERSION 0.1.0 LANGUAGES CXX)
+project(Adrift VERSION 0.1.0 LANGUAGES CXX)
 
 # Compiler and linker config
 
@@ -21,14 +21,14 @@ enable_testing()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
-add_subdirectory(jungle-infrastructure)
-add_subdirectory(jungle-ui)
-add_subdirectory(jungle-base)
-add_subdirectory(jungle-allocator)
-add_subdirectory(jungle-tasks)
-add_subdirectory(jungle-core)
-add_subdirectory(jungle-reflection)
+add_subdirectory(adrift-infrastructure)
+add_subdirectory(adrift-ui)
+add_subdirectory(adrift-base)
+add_subdirectory(adrift-allocator)
+add_subdirectory(adrift-tasks)
+add_subdirectory(adrift-core)
+add_subdirectory(adrift-reflection)
 add_subdirectory(tests)
 
-# jgproj 3rd: cpptrace
-add_subdirectory(${CMAKE_SOURCE_DIR}/.jgproj/3rd/cpptrace)
+# adftproj 3rd: cpptrace
+add_subdirectory(${CMAKE_SOURCE_DIR}/.adftproj/3rd/cpptrace)

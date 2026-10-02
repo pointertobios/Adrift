@@ -3,20 +3,20 @@
 
 #include <print>
 
-#include "jungle/async/future.h"
-#include "jungle/async/invoke.h"
-#include "jungle/build_id.h"
-#include "jungle/core/asset/asset_id.h"
-#include "jungle/core/ecs/component_storage.h"
-#include "jungle/core/ecs/entity.h"
-#include "jungle/core/level.h"
-#include "jungle/meta.h"
-#include "jungle/preusing.h"
-#include "jungle/tasks/runtime/runtime.h"
-#include "jungle/tasks/this_task.h"
+#include "adrift/async/future.h"
+#include "adrift/async/invoke.h"
+#include "adrift/build_id.h"
+#include "adrift/core/asset/asset_id.h"
+#include "adrift/core/ecs/component_storage.h"
+#include "adrift/core/ecs/entity.h"
+#include "adrift/core/level.h"
+#include "adrift/meta.h"
+#include "adrift/preusing.h"
+#include "adrift/tasks/runtime/runtime.h"
+#include "adrift/tasks/this_task.h"
 
-using namespace jungle;
-using namespace jungle::core::ecs;
+using namespace adrift;
+using namespace adrift::core::ecs;
 
 enum class Color { Red, Green, Blue };
 
@@ -80,9 +80,9 @@ int main() {
     std::vector l{Color::Red, Color::Green, Color::Blue};
     std::println("{}", debug(entity));
     std::println("{}", debug(s));
-    jungle::meta::has_template_annotation<^^jungle::core::ecs::Entity, ^^annotation_test>();
+    adrift::meta::has_template_annotation<^^adrift::core::ecs::Entity, ^^annotation_test>();
 
-    using jungle::tasks::runtime::runtime_config;
+    using adrift::tasks::runtime::runtime_config;
     {
         auto rt = runtime_config{}.multi_threaded().build();
         rt.spawn_blocking([] { std::println("blocking task"); });
