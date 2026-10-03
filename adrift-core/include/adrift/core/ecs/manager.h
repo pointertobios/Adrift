@@ -38,6 +38,8 @@ public:
         return *res;
     }
 
+    virtual ~Manager() = default;
+
     std::string_view name() const { return m_component_name; }
 
     virtual std::vector<std::reference_wrapper<Component<>>> vget_components() = 0;
@@ -48,10 +50,10 @@ public:
 
 protected:
     constexpr Manager(type_id type, std::string_view component_name)
-            : util::type_mutate<Manager<>>{type}
+            : type_mutate{type}
             , m_component_name{component_name} {}
 
-    static void reigster_manager_creator(string_id name, ManagerCreator creator) {
+    static void register_manager_creator(string_id name, ManagerCreator creator) {
         auto res = s_creators_of_component.insert(name, creator);
         ADRIFT_ASSERT(res);
     }
@@ -69,12 +71,14 @@ public:
         auto crtor = +[] -> std::tuple<type_id, std::unique_ptr<Manager<>>> {
             return {type_id::of<Manager<C>>(), std::make_unique<Manager>()};
         };
-        Manager<>::reigster_manager_creator(string_id{std::meta::identifier_of(^^C)}, crtor);
+        Manager<>::register_manager_creator(string_id{std::meta::identifier_of(^^C)}, crtor);
         return crtor;
     }
 
     constexpr Manager()
-            : Manager<>{type_id::of<Manager<C>>(), std::meta::identifier_of(^^C)} {}
+            : Manager<>{type_id::of<Manager>(), std::meta::identifier_of(^^C)} {}
+
+    ~Manager() override = default;
 
     template<typename... Args>
     C &create(ComponentID id, Args &&...args) {

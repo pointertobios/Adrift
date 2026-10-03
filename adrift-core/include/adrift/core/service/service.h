@@ -44,6 +44,8 @@ public:
         return ctor;
     }
 
+    virtual ~Service() = default;
+
     Service(const Service &) = delete;
     Service &operator=(const Service &) = delete;
 
@@ -58,7 +60,7 @@ public:
 
 protected:
     constexpr Service(type_id type)
-            : type_mutate<Service>{type} {}
+            : type_mutate{type} {}
 
     virtual async::future<> run(ServiceController &service_ctrl) = 0;
 

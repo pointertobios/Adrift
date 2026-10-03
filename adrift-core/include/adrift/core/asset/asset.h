@@ -10,6 +10,7 @@ namespace adrift::core::asset {
 class Asset : public service::Service {
 public:
     Asset();
+    ~Asset() override = default;
 
     ustr name() const override { return "Asset"; }
 

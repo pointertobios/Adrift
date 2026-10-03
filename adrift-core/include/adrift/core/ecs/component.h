@@ -75,7 +75,7 @@ public:
 
 protected:
     constexpr Component(type_id type, Entity entity, ComponentID id)
-            : util::type_mutate<Component<>>{type}
+            : type_mutate{type}
             , m_id{id}
             , m_entity{entity} {}
 

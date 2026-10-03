@@ -21,8 +21,9 @@ enable_testing()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
+# Projects
+
 add_subdirectory(adrift-infrastructure)
-add_subdirectory(adrift-ui)
 add_subdirectory(adrift-base)
 add_subdirectory(adrift-allocator)
 add_subdirectory(adrift-tasks)

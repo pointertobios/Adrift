@@ -10,6 +10,7 @@ namespace adrift::core::log {
 class Logging : public service::Service {
 public:
     Logging();
+    ~Logging() override = default;
 
     ustr name() const override { return "Logging"; }
 

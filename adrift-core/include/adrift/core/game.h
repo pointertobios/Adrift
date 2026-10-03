@@ -15,6 +15,7 @@ namespace adrift::core {
 class Game : public service::Service {
 public:
     Game();
+    ~Game() override = default;
 
     ustr name() const override { return "Game"; }
 
