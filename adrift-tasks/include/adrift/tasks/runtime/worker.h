@@ -10,6 +10,7 @@
 
 #include "adrift/assert.h"
 #include "adrift/async/control.h"
+#include "adrift/constants.h"
 #include "adrift/runtime/daemon.h"
 #include "adrift/tasks/runtime/predecl.h"
 #include "adrift/tasks/runtime/scheduler.h"
@@ -121,6 +122,25 @@ struct task_block_base {
     task_id to_task_id() const { return reinterpret_cast<void *>(const_cast<task_block_base *>(this)); }
 
     static task_block_base *from_task_id(task_id id) { return reinterpret_cast<task_block_base *>(id); }
+};
+
+class worker_handle {
+    friend class runtime;
+
+public:
+    worker_handle()
+            : m_handle{s_handle_allocator.fetch_add(1, morder::relaxed)} {}
+
+    worker_handle(const worker_handle &) = default;
+    worker_handle &operator=(const worker_handle &) = default;
+
+    worker_handle(worker_handle &&) = default;
+    worker_handle &operator=(worker_handle &&) = default;
+
+private:
+    usize m_handle;
+
+    inline static std::atomic<usize> s_handle_allocator{0};
 };
 
 };  // namespace adrift::tasks::runtime

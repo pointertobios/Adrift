@@ -25,6 +25,10 @@ inline auto yield() {
     return yield_awaitable{};
 }
 
+inline auto &worker_handle() {
+    return runtime::worker::current().host_runtime().get_worker_handle_of_current_worker();
+}
+
 inline auto &worker() { return runtime::worker::current(); }
 
 inline auto &host_runtime() { return runtime::worker::current().host_runtime(); }
@@ -35,6 +39,12 @@ template<typename... Args>
 auto spawn(async::async_function<Args...> auto &&fn, Args &&...args) {
     return runtime::worker::current().host_runtime().spawn(
         std::forward<decltype(fn)>(fn), std::forward<Args>(args)...);
+}
+
+template<typename... Args>
+auto spawn(runtime::worker_handle handle, async::async_function<Args...> auto &&fn, Args &&...args) {
+    return runtime::worker::current().host_runtime().spawn(
+        handle, std::forward<decltype(fn)>(fn), std::forward<Args>(args)...);
 }
 
 template<typename... Args>

@@ -75,7 +75,6 @@ public:
 
         ~read_guard() {
             if (!m_rwspinlock) {
-                m_rwspinlock = nullptr;
                 return;
             }
 
@@ -118,9 +117,10 @@ public:
             }
             s.store(state{0, true, true}, morder::acq_rel);
 
-            release();
+            auto *p = m_rwspinlock;
+            m_rwspinlock = nullptr;
 
-            return write_guard{m_rwspinlock};
+            return write_guard{p};
         }
 
     private:
@@ -131,8 +131,6 @@ public:
             auto &s = m_rwspinlock->m_state;
             while (true) {
                 state e = s.load(morder::acquire);
-                state i = e;
-                i.m_reader -= 1;
                 if (s.compare_exchange_weak(
                         e, state{e.m_reader - 1, e.m_write_willing, e.m_writing}, morder::acq_rel,
                         morder::relaxed)) {
@@ -211,70 +209,6 @@ private:
 template<concepts::non_void T, bool ReadMutable>
 class rwspinlock<T, ReadMutable> {
 public:
-    class read_guard final {
-        friend class rwspinlock;
-
-    public:
-        read_guard() = default;
-
-        ~read_guard() = default;
-
-        read_guard(const read_guard &) = delete;
-        read_guard &operator=(const read_guard &) = delete;
-
-        read_guard(read_guard &&rhs) noexcept
-                : m_rwspinlock{std::move(rhs.m_rwspinlock)}
-                , m_inner_guard{std::move(rhs.m_inner_guard)} {
-            rhs.m_rwspinlock = nullptr;
-        }
-
-        read_guard &operator=(read_guard &&rhs) noexcept {
-            if (this != &rhs) {
-                this->~read_guard();
-                new (this) read_guard{std::move(rhs)};
-            }
-            return *this;
-        }
-
-        operator bool() const noexcept { return m_rwspinlock != nullptr; }
-
-        T &operator*()
-            requires(ReadMutable)
-        {
-            ADRIFT_ASSERT(*this);
-
-            return m_rwspinlock->m_value;
-        }
-
-        const T &operator*() const {
-            ADRIFT_ASSERT(*this);
-
-            return m_rwspinlock->m_value;
-        }
-
-        T *operator->()
-            requires(ReadMutable)
-        {
-            ADRIFT_ASSERT(*this);
-
-            return &m_rwspinlock->m_value;
-        }
-
-        const T *operator->() const {
-            ADRIFT_ASSERT(*this);
-
-            return &m_rwspinlock->m_value;
-        }
-
-    private:
-        read_guard(rwspinlock *p, rwspinlock<>::read_guard &&inner_guard) noexcept
-                : m_rwspinlock{p}
-                , m_inner_guard{std::move(inner_guard)} {}
-
-        rwspinlock *m_rwspinlock{nullptr};
-        rwspinlock<>::read_guard m_inner_guard;
-    };
-
     class write_guard final {
         friend class rwspinlock;
 
@@ -330,6 +264,86 @@ public:
 
         rwspinlock *m_rwspinlock{nullptr};
         rwspinlock<>::write_guard m_inner_guard;
+    };
+
+    class read_guard final {
+        friend class rwspinlock;
+
+    public:
+        read_guard() = default;
+
+        ~read_guard() = default;
+
+        read_guard(const read_guard &) = delete;
+        read_guard &operator=(const read_guard &) = delete;
+
+        read_guard(read_guard &&rhs) noexcept
+                : m_rwspinlock{std::move(rhs.m_rwspinlock)}
+                , m_inner_guard{std::move(rhs.m_inner_guard)} {
+            rhs.m_rwspinlock = nullptr;
+        }
+
+        read_guard &operator=(read_guard &&rhs) noexcept {
+            if (this != &rhs) {
+                this->~read_guard();
+                new (this) read_guard{std::move(rhs)};
+            }
+            return *this;
+        }
+
+        operator bool() const noexcept { return m_rwspinlock != nullptr; }
+
+        write_guard upgrade() && {
+            if (!m_rwspinlock) {
+                return write_guard{};
+            }
+
+            auto inner_guard = std::move(m_inner_guard).upgrade();
+            if (!inner_guard) {
+                return write_guard{};
+            }
+
+            auto *p = m_rwspinlock;
+            m_rwspinlock = nullptr;
+
+            return write_guard{p, std::move(inner_guard)};
+        }
+
+        T &operator*()
+            requires(ReadMutable)
+        {
+            ADRIFT_ASSERT(*this);
+
+            return m_rwspinlock->m_value;
+        }
+
+        const T &operator*() const {
+            ADRIFT_ASSERT(*this);
+
+            return m_rwspinlock->m_value;
+        }
+
+        T *operator->()
+            requires(ReadMutable)
+        {
+            ADRIFT_ASSERT(*this);
+
+            return &m_rwspinlock->m_value;
+        }
+
+        const T *operator->() const {
+            ADRIFT_ASSERT(*this);
+
+            return &m_rwspinlock->m_value;
+        }
+
+    private:
+        read_guard(rwspinlock *p, rwspinlock<>::read_guard &&inner_guard) noexcept
+                : m_rwspinlock{p}
+                , m_inner_guard{std::move(inner_guard)} {}
+
+        rwspinlock *m_rwspinlock{nullptr};
+        rwspinlock<>::read_guard m_inner_guard;
     };
 
     rwspinlock()
