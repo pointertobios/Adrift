@@ -153,7 +153,7 @@ public:
 
     void main_loop() const;
 
-    void stop() const;
+    void stop();
 
 private:
     auto task_coroutine(async::future_type auto future_value)
