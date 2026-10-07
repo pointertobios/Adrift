@@ -579,15 +579,19 @@ def create_project(root: Path, value: str, kind: str) -> None:
         target_name = target_name.removeprefix("adrift::")
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.+-]*", target_name):
         fail(f"target 名称无效: {target_name}")
+    # 原始 target 名称，用于 CMake 变量与 adrift:: 别名
+    base_name = target_name.removeprefix("adrift-")
+    # 自动为 target 名称添加 adrift- 前缀
+    target_name = f"adrift-{base_name}"
     if kind == "executable":
         declaration = f"add_executable({target_name})"
         alias = ""
     elif kind == "static":
         declaration = f"add_library({target_name} STATIC)"
-        alias = f"add_library(adrift::{target_name} ALIAS {target_name})\n"
+        alias = f"add_library(adrift::{base_name} ALIAS {target_name})\n"
     else:
         declaration = f"add_library({target_name} SHARED)"
-        alias = f"add_library(adrift::{target_name} ALIAS {target_name})\n"
+        alias = f"add_library(adrift::{base_name} ALIAS {target_name})\n"
     project_dir.mkdir(parents=True, exist_ok=True)
     for directory in ("include", "src", "unit_tests"):
         (project_dir / directory).mkdir(exist_ok=True)
@@ -598,7 +602,7 @@ def create_project(root: Path, value: str, kind: str) -> None:
     ):
         fail(f"target 已存在: {value}")
     if not cmake_file.exists():
-        sources = f"${{{target_name.upper()}_SOURCES}}"
+        sources = f"${{{base_name.upper()}_SOURCES}}"
         cmake_file.write_text(
             "include(${PROJECT_SOURCE_DIR}/cmake/GeneratePch.cmake)\n"
             "include(${PROJECT_SOURCE_DIR}/cmake/CollectFiles.cmake)\n\n"
@@ -606,7 +610,7 @@ def create_project(root: Path, value: str, kind: str) -> None:
             "    INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include\n"
             "    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/pch.h\n"
             ")\n\n"
-            f"adrift_collect_files({target_name.upper()}_SOURCES\n"
+            f"adrift_collect_files({base_name.upper()}_SOURCES\n"
             "    INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src\n"
             '    PATTERNS "*.cpp"\n'
             ")\n\n"
@@ -623,10 +627,10 @@ def create_project(root: Path, value: str, kind: str) -> None:
             f"{declaration}\n"
             f"{alias}",
         )
-    unit_test_sources = f"{target_name.upper()}_UNIT_TEST_SOURCES"
+    unit_test_sources = f"{base_name.upper()}_UNIT_TEST_SOURCES"
     unit_test_target = f"{target_name}-unit-tests"
     unit_test_library = (
-        target_name if kind == "executable" else f"adrift::{target_name}"
+        target_name if kind == "executable" else f"adrift::{base_name}"
     )
     append_once(
         cmake_file,
@@ -821,10 +825,11 @@ def remove_dependency(
     root_cmake = root / "CMakeLists.txt"
     content = target.cmake_file.read_text(encoding="utf-8")
     if dependency is None:
+        alias_name = target.name.removeprefix("adrift-")
         declaration = re.compile(
             rf"\n?add_(?:executable|library)\(\s*{re.escape(target.name)}"
             rf"(?:[^()]|\([^()]*\))*\)\n?"
-            rf"|\n?add_library\(\s*adrift::{re.escape(target.name)}\s+ALIAS\s*"
+            rf"|\n?add_library\(\s*adrift::{re.escape(alias_name)}\s+ALIAS\s*"
             rf"{re.escape(target.name)}\s*\)\n?",
             re.IGNORECASE | re.DOTALL,
         )

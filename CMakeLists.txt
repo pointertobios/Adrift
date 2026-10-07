@@ -24,12 +24,12 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 # Projects
 
 add_subdirectory(adrift-infrastructure)
-add_subdirectory(adrift-base)
-add_subdirectory(adrift-allocator)
-add_subdirectory(adrift-tasks)
-add_subdirectory(adrift-core)
-add_subdirectory(adrift-reflection)
-add_subdirectory(tests)
-
 # adftproj 3rd: cpptrace
 add_subdirectory(${CMAKE_SOURCE_DIR}/.adftproj/3rd/cpptrace)
+add_subdirectory(adrift-base)
+add_subdirectory(adrift-allocator)
+add_subdirectory(adrift-reflection)
+add_subdirectory(adrift-tasks)
+add_subdirectory(adrift-core)
+add_subdirectory(adrift-embedded-gen)
+add_subdirectory(tests)
